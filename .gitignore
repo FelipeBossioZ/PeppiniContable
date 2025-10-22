@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.venv/
+.idea/
+db.sqlite3
+
+# Logs
+*.log
+
+# Frontend
+frontend/node_modules/
+frontend/build/
+
+# Docker
+.dockerignore
+Dockerfile
