@@ -16,6 +16,7 @@ function App() {
     debit: 0,
     credit: 0
   });
+  const [reportForm, setReportForm] = useState({ company: '', year: new Date().getFullYear(), month: new Date().getMonth() + 1 });
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
 
@@ -26,7 +27,12 @@ function App() {
         .then(response => setTransactions(response.data))
         .catch(error => console.error('Error fetching transactions:', error));
       axios.get('/api/companies/', { headers })
-        .then(response => setCompanies(response.data))
+        .then(response => {
+          setCompanies(response.data);
+          if (response.data.length > 0) {
+            setReportForm(prev => ({ ...prev, company: response.data[0].id }));
+          }
+        })
         .catch(error => console.error('Error fetching companies:', error));
       axios.get('/api/accounts/', { headers })
         .then(response => setAccounts(response.data))
@@ -37,12 +43,9 @@ function App() {
     }
   }, [token]);
 
-  const handleLoginChange = (e) => {
-    setLoginForm({
-      ...loginForm,
-      [e.target.name]: e.target.value
-    });
-  };
+  const handleLoginChange = (e) => setLoginForm({ ...loginForm, [e.target.name]: e.target.value });
+  const handleReportChange = (e) => setReportForm({ ...reportForm, [e.target.name]: e.target.value });
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
 
   const handleLoginSubmit = (e) => {
     e.preventDefault();
@@ -60,22 +63,36 @@ function App() {
     localStorage.removeItem('token');
   };
 
-  const handleChange = (e) => {
-    setForm({
-      ...form,
-      [e.target.name]: e.target.value
-    });
-  };
-
   const handleSubmit = (e) => {
     e.preventDefault();
-    axios.post('/api/transactions/', form, {
-        headers: { Authorization: `Token ${token}` }
-    })
-      .then(response => {
-        setTransactions([...transactions, response.data]);
-      })
+    axios.post('/api/transactions/', form, { headers: { Authorization: `Token ${token}` } })
+      .then(response => setTransactions([...transactions, response.data]))
       .catch(error => console.error('Error creating transaction:', error));
+  };
+
+  const handleReportDownload = () => {
+    const { company, year, month } = reportForm;
+    if (!company) {
+      alert("Please select a company for the report.");
+      return;
+    }
+    const url = `/api/export-excel/${company}/${year}/${month}/`;
+    axios.get(url, { headers: { Authorization: `Token ${token}` }, responseType: 'blob' })
+      .then(response => {
+        const blob = new Blob([response.data], { type: response.headers['content-type'] });
+        const link = document.createElement('a');
+        link.href = window.URL.createObjectURL(blob);
+        const contentDisposition = response.headers['content-disposition'];
+        let fileName = 'balance.xlsx';
+        if (contentDisposition) {
+            const fileNameMatch = contentDisposition.match(/filename="(.+)"/);
+            if (fileNameMatch.length === 2)
+                fileName = fileNameMatch[1];
+        }
+        link.download = fileName;
+        link.click();
+      })
+      .catch(error => console.error('Error downloading report:', error));
   };
 
   if (!token) {
@@ -95,6 +112,17 @@ function App() {
     <div className="App">
       <h1>Accounting System</h1>
       <button onClick={handleLogout}>Logout</button>
+
+      <div className="report-section">
+        <h2>Generate Report</h2>
+        <select name="company" value={reportForm.company} onChange={handleReportChange} required>
+          <option value="">Select Company</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <input type="number" name="year" value={reportForm.year} onChange={handleReportChange} />
+        <input type="number" name="month" value={reportForm.month} onChange={handleReportChange} min="1" max="12" />
+        <button onClick={handleReportDownload}>Download Excel Report</button>
+      </div>
 
       <h2>Transactions</h2>
       <table>

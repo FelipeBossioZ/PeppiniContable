@@ -53,72 +53,59 @@ def third_party_list(request):
 @permission_classes([IsAuthenticated, HasValidLicense])
 def export_to_excel(request, company_id, year, month):
     company = Company.objects.get(id=company_id)
-
-    # Determine date range for the report
     first_day_of_month = date(year, month, 1)
     last_day_of_month_num = monthrange(year, month)[1]
     last_day_of_month = date(year, month, last_day_of_month_num)
 
-    # Get all transactions up to the end of the reporting month
     transactions = Transaction.objects.filter(
         company=company,
         date__lte=last_day_of_month
     ).select_related('account', 'third_party')
 
-    # Use a dictionary to store balances
-    balances = defaultdict(lambda: {
-        'saldo_anterior': Decimal('0.00'),
-        'debitos': Decimal('0.00'),
-        'creditos': Decimal('0.00')
-    })
+    balances = defaultdict(lambda: defaultdict(Decimal))
 
-    # Calculate previous balance from transactions before the current month
-    previous_transactions = transactions.filter(date__lt=first_day_of_month)
-    for t in previous_transactions:
+    for t in transactions:
         key = (t.account.code, t.account.name, t.third_party.nit, t.third_party.name)
-        balances[key]['saldo_anterior'] += t.debit - t.credit
+        if t.date < first_day_of_month:
+            balances[key]['saldo_anterior'] += t.debit - t.credit
+        else:
+            balances[key]['debitos'] += t.debit
+            balances[key]['creditos'] += t.credit
 
-    # Calculate debits and credits for the current month
-    current_month_transactions = transactions.filter(date__gte=first_day_of_month)
-    for t in current_month_transactions:
-        key = (t.account.code, t.account.name, t.third_party.nit, t.third_party.name)
-        balances[key]['debitos'] += t.debit
-        balances[key]['creditos'] += t.credit
-
-    # Create Excel Workbook
     workbook = openpyxl.Workbook()
     worksheet = workbook.active
     worksheet.title = "Balance de Prueba"
 
-    # Header Section
     worksheet.cell(row=1, column=1, value=f"{company.name} - NIT: {company.nit}").font = Font(bold=True, size=14)
     worksheet.cell(row=2, column=1, value="Balance de Prueba por Tercero").font = Font(bold=True, size=12)
     worksheet.cell(row=3, column=1, value=f"Fecha de Corte: {last_day_of_month.strftime('%Y-%m-%d')}").font = Font(italic=True)
 
-    # Column Headers
-    headers = ["Cuenta", "Nombre Cuenta", "NIT Tercero", "Nombre Tercero", "Concepto", "Descripción Adicional", "Saldo Anterior", "Débitos", "Créditos", "Saldo Final"]
+    headers = ["Cuenta", "Nombre Cuenta", "NIT Tercero", "Nombre Tercero", "Saldo Anterior", "Débitos", "Créditos", "Saldo Final"]
     worksheet.append([])
     worksheet.append(headers)
     for cell in worksheet[5]:
         cell.font = Font(bold=True)
 
-    # Data Rows
+    sorted_keys = sorted(balances.keys(), key=lambda x: x[0])
     row_num = 6
-    for t in current_month_transactions:
-        key = (t.account.code, t.account.name, t.third_party.nit, t.third_party.name)
+    for key in sorted_keys:
         data = balances[key]
         saldo_anterior = data['saldo_anterior']
         debitos = data['debitos']
         creditos = data['creditos']
+
+        if saldo_anterior == 0 and debitos == 0 and creditos == 0:
+            continue
+
         saldo_final = saldo_anterior + debitos - creditos
 
+        account_code, account_name, third_party_nit, third_party_name = key
+
         row_data = [
-            t.account.code,
-            t.account.name,
-            t.third_party.nit,
-            t.third_party.name,
-            t.concept,
-            t.additional_description,
+            account_code,
+            account_name,
+            third_party_nit,
+            third_party_name,
             saldo_anterior,
             debitos,
             creditos,
@@ -131,7 +118,6 @@ def export_to_excel(request, company_id, year, month):
                 cell.number_format = '#,##0.00'
         row_num += 1
 
-    # Final Touches & Response
     for col in worksheet.columns:
         max_length = 0
         column = col[0].column_letter
