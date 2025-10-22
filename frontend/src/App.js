@@ -4,11 +4,14 @@ import './App.css';
 
 function App() {
   const [transactions, setTransactions] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [thirdParties, setThirdParties] = useState([]);
   const [form, setForm] = useState({
-    company: 1,
+    company: '',
     date: '',
-    account: 1,
-    third_party: 1,
+    account: '',
+    third_party: '',
     concept: '',
     debit: 0,
     credit: 0
@@ -18,11 +21,19 @@ function App() {
 
   useEffect(() => {
     if (token) {
-      axios.get('/api/transactions/', {
-        headers: { Authorization: `Token ${token}` }
-      })
-      .then(response => setTransactions(response.data))
-      .catch(error => console.error('Error fetching transactions:', error));
+      const headers = { Authorization: `Token ${token}` };
+      axios.get('/api/transactions/', { headers })
+        .then(response => setTransactions(response.data))
+        .catch(error => console.error('Error fetching transactions:', error));
+      axios.get('/api/companies/', { headers })
+        .then(response => setCompanies(response.data))
+        .catch(error => console.error('Error fetching companies:', error));
+      axios.get('/api/accounts/', { headers })
+        .then(response => setAccounts(response.data))
+        .catch(error => console.error('Error fetching accounts:', error));
+      axios.get('/api/third-parties/', { headers })
+        .then(response => setThirdParties(response.data))
+        .catch(error => console.error('Error fetching third parties:', error));
     }
   }, [token]);
 
@@ -58,7 +69,6 @@ function App() {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    // This endpoint needs to be created in the backend to handle POST requests.
     axios.post('/api/transactions/', form, {
         headers: { Authorization: `Token ${token}` }
     })
@@ -110,7 +120,19 @@ function App() {
 
       <h2>Add Transaction</h2>
       <form onSubmit={handleSubmit}>
+        <select name="company" value={form.company} onChange={handleChange} required>
+          <option value="">Select Company</option>
+          {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
         <input type="date" name="date" value={form.date} onChange={handleChange} required />
+        <select name="account" value={form.account} onChange={handleChange} required>
+          <option value="">Select Account</option>
+          {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+        <select name="third_party" value={form.third_party} onChange={handleChange} required>
+            <option value="">Select Third Party</option>
+            {thirdParties.map(tp => <option key={tp.id} value={tp.id}>{tp.name}</option>)}
+        </select>
         <input type="text" name="concept" placeholder="Concept" value={form.concept} onChange={handleChange} required />
         <input type="number" name="debit" placeholder="Debit" value={form.debit} onChange={handleChange} />
         <input type="number" name="credit" placeholder="Credit" value={form.credit} onChange={handleChange} />

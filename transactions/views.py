@@ -1,6 +1,6 @@
 from django.http import JsonResponse, HttpResponse
-from .models import Transaction, Company
-from .serializers import TransactionSerializer
+from .models import Transaction, Company, Account, ThirdParty
+from .serializers import TransactionSerializer, CompanySerializer, AccountSerializer, ThirdPartySerializer
 from .permissions import HasValidLicense
 import openpyxl
 from openpyxl.styles import Font
@@ -27,6 +27,27 @@ def transaction_list(request):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def company_list(request):
+    companies = Company.objects.all()
+    serializer = CompanySerializer(companies, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def account_list(request):
+    accounts = Account.objects.all()
+    serializer = AccountSerializer(accounts, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def third_party_list(request):
+    third_parties = ThirdParty.objects.all()
+    serializer = ThirdPartySerializer(third_parties, many=True)
+    return Response(serializer.data)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, HasValidLicense])
@@ -75,33 +96,29 @@ def export_to_excel(request, company_id, year, month):
     worksheet.cell(row=3, column=1, value=f"Fecha de Corte: {last_day_of_month.strftime('%Y-%m-%d')}").font = Font(italic=True)
 
     # Column Headers
-    headers = ["Cuenta", "Nombre Cuenta", "NIT Tercero", "Nombre Tercero", "Saldo Anterior", "Débitos", "Créditos", "Saldo Final"]
+    headers = ["Cuenta", "Nombre Cuenta", "NIT Tercero", "Nombre Tercero", "Concepto", "Descripción Adicional", "Saldo Anterior", "Débitos", "Créditos", "Saldo Final"]
     worksheet.append([])
     worksheet.append(headers)
     for cell in worksheet[5]:
         cell.font = Font(bold=True)
 
     # Data Rows
-    sorted_keys = sorted(balances.keys(), key=lambda x: x[0])
     row_num = 6
-    for key in sorted_keys:
+    for t in current_month_transactions:
+        key = (t.account.code, t.account.name, t.third_party.nit, t.third_party.name)
         data = balances[key]
         saldo_anterior = data['saldo_anterior']
         debitos = data['debitos']
         creditos = data['creditos']
-
-        if saldo_anterior == 0 and debitos == 0 and creditos == 0:
-            continue
-
         saldo_final = saldo_anterior + debitos - creditos
 
-        account_code, account_name, third_party_nit, third_party_name = key
-
         row_data = [
-            account_code,
-            account_name,
-            third_party_nit,
-            third_party_name,
+            t.account.code,
+            t.account.name,
+            t.third_party.nit,
+            t.third_party.name,
+            t.concept,
+            t.additional_description,
             saldo_anterior,
             debitos,
             creditos,

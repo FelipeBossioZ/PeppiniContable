@@ -22,3 +22,6 @@ frontend/build/
 # Docker
 .dockerignore
 Dockerfile
+
+# Environment
+.env
