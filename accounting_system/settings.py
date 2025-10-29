@@ -133,3 +133,19 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.TokenAuthentication',
     ],
 }
+
+
+# En settings.py
+
+# Busca CORS y cambia a esto:
+#CORS_ALLOWED_ORIGINS = [
+#    "http://localhost:3000",
+ ###   "http://localhost:8000",
+ #   "http://127.0.0.1:8000",
+ #   "file://",  # Para archivos locales
+  #  "null",  # Para cuando abres el HTML directamente
+#]
+
+# O más simple, temporalmente para desarrollo:
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
