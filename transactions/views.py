@@ -689,5 +689,151 @@ def corregir_transaccion(request, transaction_id):
         logger.error(f"Error en corrección automática: {str(e)}")
         return Response({'error': f'Error interno: {str(e)}'}, status=500)
 
+# ============================================
+# AGREGAR ESTA FUNCIÓN AL FINAL DE views.py
+# (antes del último comentario o al final del archivo)
+# ============================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def calcular_correcciones(request, transaction_id):
+    """
+    Calcula cómo deberían estar los movimientos SIN guardar nada
+    """
+    try:
+        transaction = Transaction.objects.get(id=transaction_id)
+        
+        correcciones = []
+        
+        # Cuentas especiales (casos raros)
+        CUENTAS_ESPECIALES_DEBITO = ['4175']
+        CUENTAS_ESPECIALES_CREDITO = ['5905']
+        
+        for movimiento in transaction.movements.all():
+            cuenta = movimiento.account
+            tipo_cuenta = cuenta.tipo
+            codigo_cuenta = cuenta.code
+            
+            # Valores actuales (mal)
+            debito_actual = float(movimiento.debit)
+            credito_actual = float(movimiento.credit)
+            
+            # Valores corregidos (bien)
+            debito_corregido = debito_actual
+            credito_corregido = credito_actual
+            
+            # Lógica de corrección
+            if codigo_cuenta in CUENTAS_ESPECIALES_DEBITO:
+                if credito_actual > 0 and tipo_cuenta == 'INGRESO':
+                    debito_corregido = credito_actual
+                    credito_corregido = 0
+                    
+            elif codigo_cuenta in CUENTAS_ESPECIALES_CREDITO:
+                if debito_actual > 0 and tipo_cuenta == 'GASTO':
+                    credito_corregido = debito_actual
+                    debito_corregido = 0
+                    
+            else:
+                # Reglas normales
+                if credito_actual > 0 and tipo_cuenta in ['ACTIVO', 'GASTO']:
+                    debito_corregido = credito_actual
+                    credito_corregido = 0
+                    
+                elif debito_actual > 0 and tipo_cuenta in ['PASIVO', 'INGRESO', 'PATRIMONIO']:
+                    credito_corregido = debito_actual
+                    debito_corregido = 0
+            
+            correcciones.append({
+                'movement_index': list(transaction.movements.all()).index(movimiento),
+                'account_id': cuenta.id,
+                'third_party_id': movimiento.third_party.id,
+                'debito_corregido': debito_corregido,
+                'credito_corregido': credito_corregido
+            })
+        
+        return Response({
+            'correcciones': correcciones
+        })
+        
+    except Transaction.DoesNotExist:
+        return Response({'error': 'Transacción no encontrada'}, status=404)
+    except Exception as e:
+        logger.error(f"Error calculando correcciones: {str(e)}")
+        return Response({'error': str(e)}, status=500)
+
+# ============================================
+# AGREGAR ESTA FUNCIÓN AL FINAL DE views.py
+# ============================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def validate_transaction(request):
+    """
+    Valida un asiento SIN guardarlo en la base de datos
+    Devuelve alertas y sugerencias si las hay
+    """
+    try:
+        # Obtener los datos sin guardar
+        movements_data = request.data.get('movements', [])
+        
+        alertas = []
+        sugerencias = []
+        correcciones = []
+        
+        # Cuentas especiales
+        CUENTAS_ESPECIALES_DEBITO = ['4175']
+        CUENTAS_ESPECIALES_CREDITO = ['5905']
+        
+        for index, mov_data in enumerate(movements_data):
+            try:
+                cuenta = Account.objects.get(id=mov_data['account'])
+                tipo_cuenta = cuenta.tipo
+                codigo_cuenta = cuenta.code
+                
+                debito = float(mov_data.get('debit', 0))
+                credito = float(mov_data.get('credit', 0))
+                
+                # Valores corregidos
+                debito_corregido = debito
+                credito_corregido = credito
+                
+                # Validar según el tipo de cuenta
+                if debito > 0:
+                    if tipo_cuenta in ['PASIVO', 'INGRESO'] and codigo_cuenta not in CUENTAS_ESPECIALES_DEBITO:
+                        alertas.append(f"⚠️ DÉBITO a {codigo_cuenta} - {cuenta.name} ({tipo_cuenta})")
+                        sugerencias.append(f"Los {tipo_cuenta.lower()} normalmente disminuyen con DÉBITO")
+                        # Calcular corrección
+                        credito_corregido = debito
+                        debito_corregido = 0
+                        
+                elif credito > 0:
+                    if tipo_cuenta in ['ACTIVO', 'GASTO'] and codigo_cuenta not in CUENTAS_ESPECIALES_CREDITO:
+                        alertas.append(f"⚠️ CRÉDITO a {codigo_cuenta} - {cuenta.name} ({tipo_cuenta})")
+                        sugerencias.append(f"Los {tipo_cuenta.lower()} normalmente disminuyen con CRÉDITO")
+                        # Calcular corrección
+                        debito_corregido = credito
+                        credito_corregido = 0
+                
+                correcciones.append({
+                    'movement_index': index,
+                    'account_id': cuenta.id,
+                    'third_party_id': mov_data['third_party'],
+                    'debito_corregido': debito_corregido,
+                    'credito_corregido': credito_corregido
+                })
+                
+            except Account.DoesNotExist:
+                continue
+        
+        return Response({
+            'alertas': alertas,
+            'sugerencias': sugerencias,
+            'correcciones': correcciones
+        })
+        
+    except Exception as e:
+        logger.error(f"Error validando transacción: {str(e)}")
+        return Response({'error': str(e)}, status=500)
+
 # Alias para compatibilidad
 export_to_excel = export_to_excel_enhanced

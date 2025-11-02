@@ -9,7 +9,9 @@ from .views import (
     export_to_excel_enhanced, 
     dashboard_stats, 
     generate_recurring_transactions,
-    corregir_transaccion
+    corregir_transaccion,
+    calcular_correcciones,
+    validate_transaction,
 )
 
 urlpatterns = [
@@ -22,6 +24,8 @@ urlpatterns = [
     path('third-parties/', third_party_list, name='third_party_list'),
     path('movements/', movement_list, name='movement_list'),
     path('transactions/<int:transaction_id>/corregir/', corregir_transaccion, name='corregir_transaccion'),
+    path('transactions/<int:transaction_id>/calcular-correcciones/', calcular_correcciones, name='calcular_correcciones'),
+    path('transactions/validate/', validate_transaction, name='validate_transaction'),
     
     # ==============================================
     # URLs MEJORADAS - PARTIDA DOBLE

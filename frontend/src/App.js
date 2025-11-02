@@ -155,73 +155,84 @@ function App() {
   };
 
   // ========== ENVÍO TRANSACCIÓN PARTIDA DOBLE ==========
-  const handleSubmitTransaction = async (e) => {
-    e.preventDefault();
+  // ============================================
+// REEMPLAZAR TODA LA FUNCIÓN handleSubmitTransaction
+// Busca donde dice: const handleSubmitTransaction = async (e) => {
+// Y reemplaza TODA esa función con esta versión:
+// ============================================
+
+const handleSubmitTransaction = async (e) => {
+  e.preventDefault();
+  
+  const validation = validateTransaction();
+  if (!validation.isValid) {
+    showNotification(validation.message, 'error');
+    return;
+  }
+
+  setLoading(true);
+  try {
+    const headers = { 
+      'Authorization': `Token ${token}`,
+      'Content-Type': 'application/json'
+    };
+
+    // Filtrar movimientos vacíos
+    const filteredMovements = transactionForm.movements.filter(m => 
+      m.account && m.third_party && (m.debit > 0 || m.credit > 0)
+    );
+
+    const transactionData = {
+      ...transactionForm,
+      movements: filteredMovements
+    };
     
-    const validation = validateTransaction();
-    if (!validation.isValid) {
-      showNotification(validation.message, 'error');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const headers = { 
-        'Authorization': `Token ${token}`,
-        'Content-Type': 'application/json'
-      };
-
-      // Filtrar movimientos vacíos
-      const filteredMovements = transactionForm.movements.filter(m => 
-        m.account && m.third_party && (m.debit > 0 || m.credit > 0)
-      );
-
-      const transactionData = {
-        ...transactionForm,
-        movements: filteredMovements
-      };
-      
-      
-      
-      const response = await axios.post('/api/transactions/', transactionData, { headers });
-      
-      if (response.data.alertas) {
-          // Mostrar alerta bonita en lugar de éxito inmediato
-          setAlertasContables({
-            alertas: response.data.alertas,
-            sugerencias: response.data.sugerencias, 
-            transactionId: response.data.id
-          });
-          
-          // NO resetear el formulario todavía - esperar confirmación
-          setTransactions(prev => [response.data, ...prev]);
-      } else {
-          // Si no hay alertas, éxito normal
-          setTransactions(prev => [response.data, ...prev]);
-          showNotification('Transacción con partida doble creada exitosamente', 'success');
-          
-          // Resetear formulario
-          setTransactionForm({
-            company: '',
-            date: new Date().toISOString().split('T')[0],
-            concept: '',
-            additional_description: '',
-            movements: [
-              { account: '', third_party: '', debit: 0, credit: 0, description: '' },
-              { account: '', third_party: '', debit: 0, credit: 0, description: '' }
-            ]
-          });
-          
-          setActiveTab('transactions');
-        }
-      }   
-  catch (error) {
-      console.error('Error creando transacción:', error);
-      showNotification('Error al crear transacción', 'error');
-    } finally {
+    // 1. PRIMERO VALIDAR (SIN GUARDAR)
+    const validateResponse = await axios.post(
+      '/api/transactions/validate/',
+      transactionData,
+      { headers }
+    );
+    
+    // 2. SI HAY ALERTAS, MOSTRAR MODAL (NO GUARDAR)
+    if (validateResponse.data.alertas && validateResponse.data.alertas.length > 0) {
+      setAlertasContables({
+        alertas: validateResponse.data.alertas,
+        sugerencias: validateResponse.data.sugerencias,
+        correcciones: validateResponse.data.correcciones,
+        transactionData: transactionData
+      });
       setLoading(false);
+      return; // NO continuar, esperar respuesta del usuario
     }
-  };
+    
+    // 3. SI NO HAY ALERTAS, GUARDAR DIRECTAMENTE
+    const response = await axios.post('/api/transactions/', transactionData, { headers });
+    
+    setTransactions(prev => [response.data, ...prev]);
+    showNotification('✅ Transacción guardada exitosamente', 'success');
+    
+    // Resetear formulario
+    setTransactionForm({
+      company: '',
+      date: new Date().toISOString().split('T')[0],
+      concept: '',
+      additional_description: '',
+      movements: [
+        { account: '', third_party: '', debit: 0, credit: 0, description: '' },
+        { account: '', third_party: '', debit: 0, credit: 0, description: '' }
+      ]
+    });
+    
+    setActiveTab('transactions');
+    
+  } catch (error) {
+    console.error('Error creando transacción:', error);
+    showNotification('Error al crear transacción', 'error');
+  } finally {
+    setLoading(false);
+  }
+};
 
   // ========== EXPORTACIÓN EXCEL ==========
   const handleDownloadReport = async () => {
@@ -466,71 +477,79 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
   <AlertaContable
     alertas={alertasContables.alertas}
     sugerencias={alertasContables.sugerencias}
-    onConfirm={() => {
-      setAlertasContables(null);
-      showNotification('Asiento contable creado (con alertas)', 'warning');
-      // Resetear formulario después de confirmar
-      setTransactionForm({
-        company: '',
-        date: new Date().toISOString().split('T')[0],
-        concept: '',
-        additional_description: '',
-        movements: [
-          { account: '', third_party: '', debit: 0, credit: 0, description: '' },
-          { account: '', third_party: '', debit: 0, credit: 0, description: '' }
-        ]
-      });
-      setActiveTab('transactions');
-    }}
-
-    onAutoFix={async () => {
-  try {
-    const headers = { 'Authorization': `Token ${token}` };
     
-    // 1. Llamar al backend para corregir
-    const response = await axios.post(
-      `/api/transactions/${alertasContables.transactionId}/corregir/`, 
-      {}, 
-      { headers }
-    );
-    
-    if (response.data.success) {
-      // 2. Actualizar la transacción en el estado
-      setTransactions(prev => 
-        prev.map(t => 
-          t.id === alertasContables.transactionId ? response.data.transaction : t
-        )
-      );
+    onAutoFix={() => {
+      // Aplicar correcciones al formulario
+      const correcciones = alertasContables.correcciones;
       
-      // 3. Mostrar confirmación DETALLADA
-      showNotification(
-        `✅ ${response.data.message} | Balance: $${response.data.balance_final.diferencia.toFixed(2)}`, 
-        'success'
-      );
-    } else {
-      // Mostrar error específico
-      showNotification(
-        `❌ ${response.data.error} | Diferencia: $${response.data.balance_actual?.diferencia.toFixed(2) || 'N/A'}`, 
-        'error'
-      );
-    }
-    
-  } catch (error) {
-    console.error('Error completo:', error.response?.data || error);
-    const errorMsg = error.response?.data?.error || 'Error al corregir automáticamente';
-    showNotification(`❌ ${errorMsg}`, 'error');
-  }
-  
-  setAlertasContables(null);
-}}
-
-    onCancel={async () => {
-      // Eliminar la transacción problemática
-      const headers = { 'Authorization': `Token ${token}` };
-      await axios.delete(`/api/transactions/${alertasContables.transactionId}/`, { headers });
-      setTransactions(prev => prev.filter(t => t.id !== alertasContables.transactionId));
+      const movimientosCorregidos = transactionForm.movements.map((mov, index) => {
+        const correccion = correcciones.find(c => c.movement_index === index);
+        
+        if (correccion) {
+          return {
+            ...mov,
+            debit: correccion.debito_corregido,
+            credit: correccion.credito_corregido
+          };
+        }
+        
+        return mov;
+      });
+      
+      // Actualizar formulario con valores corregidos
+      setTransactionForm({
+        ...transactionForm,
+        movements: movimientosCorregidos
+      });
+      
+      // Cerrar alerta
       setAlertasContables(null);
-      showNotification('Asiento eliminado por alertas contables', 'info');
+      
+      showNotification('✅ Valores corregidos. Revisa y guarda el asiento.', 'success');
+    }}
+    
+    onConfirm={async () => {
+      // Guardar el asiento tal como está (con alertas)
+      try {
+        const headers = { 
+          'Authorization': `Token ${token}`,
+          'Content-Type': 'application/json'
+        };
+        
+        const response = await axios.post(
+          '/api/transactions/',
+          alertasContables.transactionData,
+          { headers }
+        );
+        
+        setTransactions(prev => [response.data, ...prev]);
+        showNotification('✅ Asiento guardado (con alertas)', 'warning');
+        
+        // Resetear formulario
+        setTransactionForm({
+          company: '',
+          date: new Date().toISOString().split('T')[0],
+          concept: '',
+          additional_description: '',
+          movements: [
+            { account: '', third_party: '', debit: 0, credit: 0, description: '' },
+            { account: '', third_party: '', debit: 0, credit: 0, description: '' }
+          ]
+        });
+        
+        setAlertasContables(null);
+        setActiveTab('transactions');
+        
+      } catch (error) {
+        console.error('Error guardando:', error);
+        showNotification('❌ Error al guardar', 'error');
+      }
+    }}
+    
+    onCancel={() => {
+      // Solo cerrar el modal sin guardar nada
+      setAlertasContables(null);
+      showNotification('Asiento no guardado. Puedes corregir manualmente.', 'info');
     }}
   />
 )}
