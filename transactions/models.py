@@ -146,3 +146,59 @@ class License(models.Model):
 
     def __str__(self):
         return f"License for {self.user.username}"
+
+# ============================================
+# 🆕 SISTEMA DE REGLAS INTELIGENTES
+# ============================================
+
+class AccountingRule(models.Model):
+    """
+    Reglas de clasificación automática por empresa
+    Aprende automáticamente cuando el usuario edita transacciones
+    """
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='accounting_rules')
+    third_party_nit = models.CharField(max_length=20, db_index=True)
+    third_party_name = models.CharField(max_length=200, blank=True)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE)
+    
+    # Aprendizaje automático
+    confidence_score = models.IntegerField(default=1, help_text="Cuántas veces se ha confirmado esta regla")
+    last_amount = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    average_amount = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    
+    # Metadatos
+    created_by_user = models.BooleanField(default=False, help_text="True si la creó el usuario, False si la aprendió el sistema")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['company', 'third_party_nit']
+        ordering = ['-confidence_score', '-updated_at']
+        verbose_name = "Regla de Clasificación"
+        verbose_name_plural = "Reglas de Clasificación"
+    
+    def __str__(self):
+        return f"{self.company.name} - NIT {self.third_party_nit} → {self.account.code}"
+    
+    def update_statistics(self, new_amount):
+        """Actualiza estadísticas de montos para detección de anomalías"""
+        if self.average_amount is None:
+            self.average_amount = new_amount
+        else:
+            # Media móvil simple
+            self.average_amount = (self.average_amount * Decimal('0.7')) + (new_amount * Decimal('0.3'))
+        
+        self.last_amount = new_amount
+        self.confidence_score += 1
+        self.save()
+    
+    def is_amount_anomaly(self, amount, threshold=0.5):
+        """
+        Detecta si un monto es anómalo (muy diferente al promedio)
+        threshold: 0.5 = 50% de diferencia
+        """
+        if not self.average_amount or self.average_amount == 0:
+            return False
+        
+        difference = abs(amount - self.average_amount) / self.average_amount
+        return difference > Decimal(str(threshold))

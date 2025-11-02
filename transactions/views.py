@@ -5,7 +5,7 @@ from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.db.models import Q, Sum, F, DecimalField
 from django.utils import timezone
-from .models import Transaction, Movement, Company, Account, ThirdParty, RecurringTransaction
+from .models import Transaction, Movement, Company, Account, ThirdParty, RecurringTransaction, AccountingRule
 from .serializers import (
     TransactionSerializer, TransactionCreateSerializer, MovementSerializer,
     CompanySerializer, AccountSerializer, ThirdPartySerializer
@@ -23,6 +23,12 @@ from decimal import Decimal
 from datetime import date, timedelta
 from calendar import monthrange
 import logging
+
+import pandas as pd
+import zipfile
+import rarfile
+import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -592,7 +598,8 @@ def generate_recurring_transactions(request):
 @permission_classes([IsAuthenticated, HasValidLicense])
 def corregir_transaccion(request, transaction_id):
     """
-    🔥 CORRECCIÓN INTELIGENTE: Considera cuentas especiales
+    🔥 CORRECCIÓN INTELIGENTE
+    Solo corrige clases 3, 4 y 5 (Patrimonio, Ingresos, Gastos)
     """
     try:
         transaction = Transaction.objects.get(id=transaction_id)
@@ -600,9 +607,9 @@ def corregir_transaccion(request, transaction_id):
         movimientos_corregidos = 0
         movimientos_detalle = []
         
-        # 🔥 CUENTAS ESPECIALES (que funcionan al revés)
-        CUENTAS_ESPECIALES_DEBITO = ['4175']  # Ingresos que aumentan con débito
-        CUENTAS_ESPECIALES_CREDITO = ['5905'] # Gastos que aumentan con crédito
+        # Cuentas especiales
+        CUENTAS_ESPECIALES_DEBITO = ['4175']
+        CUENTAS_ESPECIALES_CREDITO = ['5905']
         
         for movimiento in transaction.movements.all():
             cuenta = movimiento.account
@@ -617,13 +624,20 @@ def corregir_transaccion(request, transaction_id):
                 'credito_original': float(movimiento.credit)
             }
             
+            # 🔥 IGNORAR ACTIVOS Y PASIVOS
+            if tipo_cuenta in ['ACTIVO', 'PASIVO']:
+                movimientos_detalle.append({
+                    **movimiento_original,
+                    'corregido': False,
+                    'razon': f"{tipo_cuenta} - No requiere corrección automática"
+                })
+                continue
+            
             necesita_correccion = False
             razon = ""
             
-            # 🔥 REGLAS PRINCIPALES CON EXCEPCIONES:
-            
+            # Solo validar PATRIMONIO, INGRESOS y GASTOS
             if codigo_cuenta in CUENTAS_ESPECIALES_DEBITO:
-                # CUENTA ESPECIAL: Ingreso que AUMENTA con DÉBITO
                 if movimiento.credit > 0 and tipo_cuenta == 'INGRESO':
                     movimiento.debit = movimiento.credit
                     movimiento.credit = Decimal('0')
@@ -631,7 +645,6 @@ def corregir_transaccion(request, transaction_id):
                     razon = f"Cuenta especial {codigo_cuenta} (ingreso) debe aumentar con débito"
                     
             elif codigo_cuenta in CUENTAS_ESPECIALES_CREDITO:
-                # CUENTA ESPECIAL: Gasto que AUMENTA con CRÉDITO  
                 if movimiento.debit > 0 and tipo_cuenta == 'GASTO':
                     movimiento.credit = movimiento.debit
                     movimiento.debit = Decimal('0')
@@ -639,30 +652,29 @@ def corregir_transaccion(request, transaction_id):
                     razon = f"Cuenta especial {codigo_cuenta} (gasto) debe aumentar con crédito"
                     
             else:
-                # 🔥 REGLAS NORMALES para el 95% de las cuentas:
-                
-                # ACTIVOS y GASTOS NORMALES: Aumentan con DÉBITO
-                if movimiento.credit > 0 and tipo_cuenta in ['ACTIVO', 'GASTO']:
-                    movimiento.debit = movimiento.credit
-                    movimiento.credit = Decimal('0')
-                    necesita_correccion = True
-                    razon = f"{tipo_cuenta} normal debe aumentar con débito"
-                    
-                # PASIVOS, INGRESOS y PATRIMONIO NORMALES: Aumentan con CRÉDITO
-                elif movimiento.debit > 0 and tipo_cuenta in ['PASIVO', 'INGRESO', 'PATRIMONIO']:
+                # PATRIMONIO e INGRESOS: Aumentan con CRÉDITO
+                if movimiento.debit > 0 and tipo_cuenta in ['PATRIMONIO', 'INGRESO']:
                     movimiento.credit = movimiento.debit
                     movimiento.debit = Decimal('0')
                     necesita_correccion = True
                     razon = f"{tipo_cuenta} normal debe aumentar con crédito"
+                    
+                # GASTOS: Aumentan con DÉBITO
+                elif movimiento.credit > 0 and tipo_cuenta == 'GASTO':
+                    movimiento.debit = movimiento.credit
+                    movimiento.credit = Decimal('0')
+                    necesita_correccion = True
+                    razon = f"{tipo_cuenta} normal debe aumentar con débito"
             
             if necesita_correccion:
                 movimiento.save()
                 movimientos_corregidos += 1
-                movimientos_detalle.append({
-                    **movimiento_original,
-                    'corregido': True,
-                    'razon': razon
-                })
+            
+            movimientos_detalle.append({
+                **movimiento_original,
+                'corregido': necesita_correccion,
+                'razon': razon if necesita_correccion else 'Sin cambios'
+            })
         
         # Validar balance
         total_debit = sum(m.debit for m in transaction.movements.all())
@@ -771,6 +783,10 @@ def validate_transaction(request):
     """
     Valida un asiento SIN guardarlo en la base de datos
     Devuelve alertas y sugerencias si las hay
+    
+    🔥 SOLO VALIDA CLASES 3, 4 Y 5 (Patrimonio, Ingresos, Gastos)
+    No valida Clase 1 (Activos) ni Clase 2 (Pasivos) porque es normal 
+    que tengan débitos y créditos en asientos complejos
     """
     try:
         # Obtener los datos sin guardar
@@ -797,19 +813,34 @@ def validate_transaction(request):
                 debito_corregido = debito
                 credito_corregido = credito
                 
-                # Validar según el tipo de cuenta
+                # 🔥 NUEVO: Solo validar clases 3, 4 y 5
+                # IGNORAR validaciones para ACTIVO (clase 1) y PASIVO (clase 2)
+                if tipo_cuenta in ['ACTIVO', 'PASIVO']:
+                    # No mostrar alertas para activos ni pasivos
+                    correcciones.append({
+                        'movement_index': index,
+                        'account_id': cuenta.id,
+                        'third_party_id': mov_data['third_party'],
+                        'debito_corregido': debito,
+                        'credito_corregido': credito
+                    })
+                    continue  # Saltar al siguiente movimiento
+                
+                # Validar SOLO para PATRIMONIO, INGRESOS y GASTOS
                 if debito > 0:
-                    if tipo_cuenta in ['PASIVO', 'INGRESO'] and codigo_cuenta not in CUENTAS_ESPECIALES_DEBITO:
+                    # PATRIMONIO e INGRESOS normalmente aumentan con CRÉDITO
+                    if tipo_cuenta in ['PATRIMONIO', 'INGRESO'] and codigo_cuenta not in CUENTAS_ESPECIALES_DEBITO:
                         alertas.append(f"⚠️ DÉBITO a {codigo_cuenta} - {cuenta.name} ({tipo_cuenta})")
-                        sugerencias.append(f"Los {tipo_cuenta.lower()} normalmente disminuyen con DÉBITO")
+                        sugerencias.append(f"Los {tipo_cuenta.lower()}s normalmente aumentan con CRÉDITO")
                         # Calcular corrección
                         credito_corregido = debito
                         debito_corregido = 0
                         
                 elif credito > 0:
-                    if tipo_cuenta in ['ACTIVO', 'GASTO'] and codigo_cuenta not in CUENTAS_ESPECIALES_CREDITO:
+                    # GASTOS normalmente aumentan con DÉBITO
+                    if tipo_cuenta == 'GASTO' and codigo_cuenta not in CUENTAS_ESPECIALES_CREDITO:
                         alertas.append(f"⚠️ CRÉDITO a {codigo_cuenta} - {cuenta.name} ({tipo_cuenta})")
-                        sugerencias.append(f"Los {tipo_cuenta.lower()} normalmente disminuyen con CRÉDITO")
+                        sugerencias.append(f"Los gastos normalmente aumentan con DÉBITO")
                         # Calcular corrección
                         debito_corregido = credito
                         credito_corregido = 0
@@ -834,6 +865,680 @@ def validate_transaction(request):
     except Exception as e:
         logger.error(f"Error validando transacción: {str(e)}")
         return Response({'error': str(e)}, status=500)
+
+# ============================================
+# 🆕 PROCESAMIENTO AUTOMÁTICO DE FACTURAS DIAN
+# AGREGADO: [fecha de hoy]
+# ============================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def procesar_facturas_dian_excel(request):
+    """
+    🎯 PROCESA ARCHIVOS EXCEL DE LA DIAN
+    Este es el método RECOMENDADO - mucho más simple y confiable
+    
+    Archivos soportados:
+    - Facturas_Recibidas_YYYYMM.xlsx (GASTOS)
+    - Facturas_Emitidas_YYYYMM.xlsx (INGRESOS)
+    """
+    archivo = request.FILES.get('archivo')
+    company_id = request.data.get('company')
+    tipo = request.data.get('tipo')  # 'recibidas' o 'emitidas'
+    
+    if not archivo:
+        return Response({'error': 'Debe subir un archivo'}, status=400)
+    
+    if not company_id:
+        return Response({'error': 'Debe seleccionar una empresa'}, status=400)
+    
+    try:
+        # Leer Excel
+        df = pd.read_excel(archivo)
+        
+        # Normalizar nombres de columnas
+        df.columns = df.columns.str.strip().str.lower()
+        
+        resultados = {
+            'procesados': 0,
+            'exitosos': 0,
+            'errores': 0,
+            'duplicados': 0,
+            'detalles': []
+        }
+        
+        # Procesar cada fila
+        for index, row in df.iterrows():
+            resultados['procesados'] += 1
+            
+            try:
+                if tipo == 'recibidas':
+                    # FACTURAS RECIBIDAS = GASTOS
+                    resultado = crear_asiento_gasto_desde_dian(row, company_id)
+                else:
+                    # FACTURAS EMITIDAS = INGRESOS
+                    resultado = crear_asiento_ingreso_desde_dian(row, company_id)
+                
+                if resultado['estado'] == 'exitoso':
+                    resultados['exitosos'] += 1
+                elif resultado['estado'] == 'duplicado':
+                    resultados['duplicados'] += 1
+                else:
+                    resultados['errores'] += 1
+                
+                resultados['detalles'].append(resultado)
+                
+            except Exception as e:
+                resultados['errores'] += 1
+                resultados['detalles'].append({
+                    'fila': index + 2,
+                    'estado': 'error',
+                    'mensaje': str(e)
+                })
+                logger.error(f"Error procesando fila {index}: {str(e)}")
+        
+        return Response(resultados)
+        
+    except Exception as e:
+        logger.error(f"Error general procesando Excel: {str(e)}")
+        return Response({'error': str(e)}, status=500)
+
+
+def crear_asiento_gasto_desde_dian(row, company_id):
+    """
+    Crea asiento contable de GASTO desde factura recibida
+    
+    Columnas típicas del Excel de la DIAN (facturas recibidas):
+    - NIT Proveedor / NIT Emisor
+    - Razón Social Proveedor / Nombre Emisor
+    - Número de Factura / Número Documento
+    - Fecha
+    - Valor Total / Total Factura
+    - Concepto / Descripción
+    """
+    try:
+        # Extraer datos (adaptado a diferentes formatos de DIAN)
+        nit = str(row.get('nit proveedor') or row.get('nit emisor') or row.get('nit') or '').strip()
+        nombre = str(row.get('razón social proveedor') or row.get('nombre emisor') or row.get('razón social') or row.get('razon social proveedor') or row.get('razon social') or '').strip()
+        numero_factura = str(row.get('número de factura') or row.get('número documento') or row.get('numero de factura') or row.get('numero documento') or row.get('numero') or '').strip()
+        
+        # Intentar parsear fecha
+        fecha_str = row.get('fecha') or row.get('fecha factura') or row.get('fecha emision') or row.get('fecha emisión')
+        if pd.isna(fecha_str):
+            fecha = date.today()
+        else:
+            fecha = pd.to_datetime(fecha_str)
+            
+        valor = float(row.get('valor total') or row.get('total factura') or row.get('total') or row.get('valor') or 0)
+        concepto = str(row.get('concepto') or row.get('descripción') or row.get('descripcion') or row.get('observaciones') or 'Gasto general').strip()
+        
+        # Validar datos mínimos
+        if not nit or not valor or valor <= 0:
+            return {
+                'factura': numero_factura or 'N/A',
+                'estado': 'error',
+                'mensaje': 'Datos incompletos o valor inválido'
+            }
+        
+        # Verificar duplicado
+        if verificar_factura_duplicada(numero_factura, nit, company_id):
+            return {
+                'factura': numero_factura,
+                'estado': 'duplicado',
+                'mensaje': 'Factura ya registrada'
+            }
+        
+        # Obtener o crear tercero
+        tercero = obtener_o_crear_tercero(nit, nombre)
+        
+        # Clasificar gasto automáticamente
+        # 🤖 Clasificación inteligente con aprendizaje
+        cuenta_gasto_code, es_anomalia, razon_clasificacion = clasificar_gasto_inteligente(
+            nit, nombre, valor, company_id
+        )
+        cuenta_gasto = Account.objects.get(code=cuenta_gasto_code)
+        cuenta_caja = Account.objects.get(code='1105')  # Caja
+        
+        # Crear transacción
+        with db_transaction.atomic():
+            transaction = Transaction.objects.create(
+                company_id=company_id,
+                date=fecha.date() if hasattr(fecha, 'date') else fecha,
+                concept=f"Factura {numero_factura}: {concepto[:100]}",
+                additional_description=f"Procesado automáticamente desde Excel DIAN - {nombre}"
+            )
+            
+            # Movimiento 1: DÉBITO a cuenta de gasto
+            Movement.objects.create(
+                transaction=transaction,
+                account=cuenta_gasto,
+                third_party=tercero,
+                debit=Decimal(str(valor)),
+                credit=Decimal('0'),
+                description=f"Factura {numero_factura}"
+            )
+            
+            # Movimiento 2: CRÉDITO a caja
+            Movement.objects.create(
+                transaction=transaction,
+                account=cuenta_caja,
+                third_party=tercero,
+                debit=Decimal('0'),
+                credit=Decimal(str(valor)),
+                description=f"Pago factura {numero_factura}"
+            )
+        
+        return {
+            'factura': numero_factura,
+            'estado': 'exitoso',
+            'transaccion_id': transaction.id,
+            'tercero': nombre,
+            'valor': valor,
+            'cuenta': cuenta_gasto_code
+        }
+        
+    except Exception as e:
+        return {
+            'factura': numero_factura if 'numero_factura' in locals() else 'N/A',
+            'estado': 'error',
+            'mensaje': str(e)
+        }
+
+
+def crear_asiento_ingreso_desde_dian(row, company_id):
+    """
+    Crea asiento contable de INGRESO desde factura emitida
+    """
+    try:
+        # Extraer datos
+        nit = str(row.get('nit adquiriente') or row.get('nit cliente') or row.get('nit') or '').strip()
+        nombre = str(row.get('razón social adquiriente') or row.get('nombre cliente') or row.get('razón social') or row.get('razon social adquiriente') or row.get('razon social') or '').strip()
+        numero_factura = str(row.get('número de factura') or row.get('número documento') or row.get('numero de factura') or row.get('numero') or '').strip()
+        
+        fecha_str = row.get('fecha') or row.get('fecha factura') or row.get('fecha emision')
+        if pd.isna(fecha_str):
+            fecha = date.today()
+        else:
+            fecha = pd.to_datetime(fecha_str)
+            
+        valor = float(row.get('valor total') or row.get('total factura') or row.get('total') or 0)
+        concepto = str(row.get('concepto') or row.get('descripción') or row.get('descripcion') or 'Venta').strip()
+        
+        if not nit or not valor or valor <= 0:
+            return {
+                'factura': numero_factura or 'N/A',
+                'estado': 'error',
+                'mensaje': 'Datos incompletos'
+            }
+        
+        # Verificar duplicado
+        if verificar_factura_duplicada(numero_factura, nit, company_id):
+            return {
+                'factura': numero_factura,
+                'estado': 'duplicado',
+                'mensaje': 'Factura ya registrada'
+            }
+        
+        # Obtener o crear tercero
+        tercero = obtener_o_crear_tercero(nit, nombre)
+        
+        # Cuentas para ingreso
+        cuenta_ingreso = Account.objects.get(code='4135')  # Comercio al por mayor y menor
+        cuenta_caja = Account.objects.get(code='1105')  # Caja
+        
+        # Crear transacción
+        with db_transaction.atomic():
+            transaction = Transaction.objects.create(
+                company_id=company_id,
+                date=fecha.date() if hasattr(fecha, 'date') else fecha,
+                concept=f"Factura venta {numero_factura}: {concepto[:100]}",
+                additional_description=f"Procesado automáticamente desde Excel DIAN - {nombre}"
+            )
+            
+            # Movimiento 1: DÉBITO a caja
+            Movement.objects.create(
+                transaction=transaction,
+                account=cuenta_caja,
+                third_party=tercero,
+                debit=Decimal(str(valor)),
+                credit=Decimal('0'),
+                description=f"Cobro factura {numero_factura}"
+            )
+            
+            # Movimiento 2: CRÉDITO a ingresos
+            Movement.objects.create(
+                transaction=transaction,
+                account=cuenta_ingreso,
+                third_party=tercero,
+                debit=Decimal('0'),
+                credit=Decimal(str(valor)),
+                description=f"Venta factura {numero_factura}"
+            )
+        
+        return {
+            'factura': numero_factura,
+            'estado': 'exitoso',
+            'transaccion_id': transaction.id,
+            'tercero': nombre,
+            'valor': valor
+        }
+        
+    except Exception as e:
+        return {
+            'factura': numero_factura if 'numero_factura' in locals() else 'N/A',
+            'estado': 'error',
+            'mensaje': str(e)
+        }
+
+
+def verificar_factura_duplicada(numero_factura, nit, company_id):
+    """Verifica si la factura ya fue registrada"""
+    if not numero_factura:
+        return False
+        
+    existe = Transaction.objects.filter(
+        company_id=company_id,
+        concept__icontains=numero_factura
+    ).exists()
+    
+    return existe
+
+
+def obtener_o_crear_tercero(nit, nombre):
+    """Crea tercero si no existe"""
+    # Limpiar NIT
+    nit_limpio = re.sub(r'[^\d]', '', str(nit))
+    
+    if not nit_limpio:
+        nit_limpio = '000000000'
+    
+    if not nombre:
+        nombre = f"Tercero {nit_limpio}"
+    
+    # Buscar o crear
+    tercero, created = ThirdParty.objects.get_or_create(
+        nit=nit_limpio,
+        defaults={'name': nombre}
+    )
+    
+    # Si existe pero el nombre cambió, actualizar
+    if not created and tercero.name != nombre and nombre != f"Tercero {nit_limpio}":
+        tercero.name = nombre
+        tercero.save()
+    
+    return tercero
+
+
+def clasificar_gasto_automatico(concepto):
+    """
+    Clasifica el gasto en una cuenta PUC basado en palabras clave
+    """
+    CLASIFICACION = {
+        '5135': ['arriendo', 'alquiler', 'renta', 'arrendamiento', 'lease', 'canon'],
+        '5120': ['honorarios', 'consultoría', 'asesoría', 'servicios profesionales', 'consultoria', 'asesoria'],
+        '5195': ['publicidad', 'marketing', 'facebook', 'google', 'instagram', 'ads', 'pauta'],
+        '5105': ['gasolina', 'combustible', 'peaje', 'transporte', 'uber', 'taxi', 'parqueadero'],
+        '5115': ['celular', 'internet', 'telecomunicaciones', 'claro', 'movistar', 'tigo', 'telefono'],
+        '5140': ['impuesto', 'gravamen', 'predial', 'vehicular', 'ica', 'reteica'],
+        '5145': ['seguros', 'póliza', 'aseguradora', 'poliza'],
+        '5160': ['mantenimiento', 'reparación', 'repuesto', 'reparacion'],
+        '5205': ['papelería', 'oficina', 'útiles', 'elementos', 'papeleria', 'utiles'],
+        '5110': ['salario', 'nomina', 'nómina', 'sueldo', 'prestaciones'],
+    }
+    
+    concepto_lower = concepto.lower()
+    
+    for cuenta, keywords in CLASIFICACION.items():
+        if any(keyword in concepto_lower for keyword in keywords):
+            return cuenta
+    
+    # Por defecto: Gastos varios
+    return '5195'
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def procesar_archivo_comprimido(request):
+    """
+    🗜️ DESCOMPRIME Y PROCESA ZIP/RAR
+    Útil si recibes facturas individuales comprimidas
+    """
+    archivo = request.FILES.get('archivo')
+    company_id = request.data.get('company')
+    
+    if not archivo:
+        return Response({'error': 'Debe subir un archivo'}, status=400)
+    
+    # Crear carpeta temporal
+    temp_dir = Path('temp_facturas')
+    temp_dir.mkdir(exist_ok=True)
+    
+    # Guardar archivo comprimido
+    archivo_path = temp_dir / archivo.name
+    with open(archivo_path, 'wb+') as destination:
+        for chunk in archivo.chunks():
+            destination.write(chunk)
+    
+    try:
+        # Descomprimir
+        if archivo.name.endswith('.zip'):
+            with zipfile.ZipFile(archivo_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+        elif archivo.name.endswith('.rar'):
+            with rarfile.RarFile(archivo_path, 'r') as rar_ref:
+                rar_ref.extractall(temp_dir)
+        else:
+            return Response({'error': 'Formato no soportado. Use ZIP o RAR'}, status=400)
+        
+        resultados = {
+            'procesados': 0,
+            'archivos_encontrados': [],
+            'mensaje': 'Archivos descomprimidos exitosamente'
+        }
+        
+        # Listar archivos encontrados
+        for file in temp_dir.rglob('*'):
+            if file.is_file():
+                resultados['archivos_encontrados'].append(str(file.name))
+                resultados['procesados'] += 1
+        
+        # Limpiar archivos temporales
+        import shutil
+        shutil.rmtree(temp_dir)
+        
+        return Response(resultados)
+        
+    except Exception as e:
+        logger.error(f"Error procesando archivo comprimido: {str(e)}")
+        
+        # Limpiar en caso de error
+        import shutil
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+            
+        return Response({'error': str(e)}, status=500)        
+
+# ============================================
+# 🤖 SISTEMA DE CLASIFICACIÓN INTELIGENTE
+# ============================================
+
+def clasificar_gasto_inteligente(nit, nombre, valor, company_id):
+    """
+    Clasificación inteligente de gastos usando reglas aprendidas
+    
+    Lógica:
+    1. Busca si existe una regla para este NIT en esta empresa
+    2. Si existe → valida si el monto es normal o anómalo
+    3. Si no existe → usa clasificación por palabras clave
+    4. Siempre fallback a 5195 DIVERSOS si hay problemas
+    """
+    try:
+        from .models import AccountingRule, Account
+        
+        # 1. Buscar regla existente
+        try:
+            rule = AccountingRule.objects.get(
+                company_id=company_id,
+                third_party_nit=nit
+            )
+            
+            # 2. Validar si el monto es anómalo
+            if rule.is_amount_anomaly(Decimal(str(valor)), threshold=0.5):
+                logger.warning(
+                    f"⚠️ ANOMALÍA: NIT {nit} - Promedio: {rule.average_amount}, "
+                    f"Actual: {valor} (>{50}% diferencia)"
+                )
+                # Monto anómalo → Mandar a revisión (5195)
+                return '5195', True, f"Monto anómalo: promedio ${rule.average_amount:,.0f}"
+            
+            # 3. Monto normal → Usar la regla aprendida
+            rule.update_statistics(Decimal(str(valor)))
+            return rule.account.code, False, f"Regla aprendida (confianza: {rule.confidence_score})"
+            
+        except AccountingRule.DoesNotExist:
+            # No existe regla → Clasificación por palabras clave
+            cuenta_code = clasificar_por_palabras_clave(nombre)
+            return cuenta_code, False, "Clasificación por palabras clave"
+            
+    except Exception as e:
+        logger.error(f"Error en clasificación inteligente: {str(e)}")
+        return '5195', False, "Error en clasificación"
+
+
+def clasificar_por_palabras_clave(texto):
+    """
+    Clasificación tradicional por palabras clave
+    Fallback cuando no hay reglas aprendidas
+    """
+    CLASIFICACION = {
+        '5120': ['arriendo', 'alquiler', 'renta', 'arrendamiento', 'lease', 'canon'],
+        '5105': ['honorarios', 'nomina', 'nómina', 'salario', 'sueldo', 'prestaciones', 'personal'],
+        '5135': ['servicios', 'mantenimiento', 'reparación', 'reparacion', 'aseo', 'vigilancia'],
+        '5140': ['impuesto', 'gravamen', 'predial', 'vehicular', 'ica', 'reteica', 'iva'],
+        '5145': ['seguros', 'póliza', 'aseguradora', 'poliza', 'seguro'],
+        '5115': ['celular', 'internet', 'telecomunicaciones', 'telefono', 'datos'],
+    }
+    
+    texto_lower = texto.lower()
+    
+    for cuenta, keywords in CLASIFICACION.items():
+        if any(keyword in texto_lower for keyword in keywords):
+            return cuenta
+    
+    # Default: Gastos diversos
+    return '5195'
+
+
+def aprender_de_edicion(transaction_id, movement_id, nueva_cuenta_id):
+    """
+    Aprende automáticamente cuando el usuario edita una transacción
+    Crea o actualiza reglas en AccountingRule
+    """
+    try:
+        from .models import Movement, AccountingRule, Account
+        
+        movement = Movement.objects.select_related(
+            'transaction', 'third_party', 'account'
+        ).get(id=movement_id)
+        
+        nit = movement.third_party.nit
+        nombre = movement.third_party.name
+        company_id = movement.transaction.company_id
+        valor = movement.debit if movement.debit > 0 else movement.credit
+        nueva_cuenta = Account.objects.get(id=nueva_cuenta_id)
+        
+        # Crear o actualizar regla
+        rule, created = AccountingRule.objects.get_or_create(
+            company_id=company_id,
+            third_party_nit=nit,
+            defaults={
+                'third_party_name': nombre,
+                'account': nueva_cuenta,
+                'created_by_user': True,
+                'last_amount': valor,
+                'average_amount': valor,
+                'confidence_score': 1
+            }
+        )
+        
+        if not created:
+            # Actualizar regla existente
+            rule.account = nueva_cuenta
+            rule.update_statistics(valor)
+            rule.save()
+            
+            logger.info(
+                f"✅ Regla actualizada: NIT {nit} → {nueva_cuenta.code} "
+                f"(confianza: {rule.confidence_score})"
+            )
+        else:
+            logger.info(f"🆕 Nueva regla creada: NIT {nit} → {nueva_cuenta.code}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error aprendiendo de edición: {str(e)}")
+        return False
+
+
+# ============================================
+# 🔧 EDITAR TRANSACCIONES
+# ============================================
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def edit_movement(request, movement_id):
+    """
+    Edita un movimiento individual y aprende de los cambios
+    """
+    try:
+        movement = Movement.objects.select_related('transaction').get(id=movement_id)
+        
+        # Datos anteriores para el aprendizaje
+        old_account_id = movement.account_id
+        
+        # Actualizar campos
+        if 'account' in request.data:
+            movement.account_id = request.data['account']
+        if 'third_party' in request.data:
+            movement.third_party_id = request.data['third_party']
+        if 'debit' in request.data:
+            movement.debit = Decimal(str(request.data['debit']))
+        if 'credit' in request.data:
+            movement.credit = Decimal(str(request.data['credit']))
+        if 'description' in request.data:
+            movement.description = request.data['description']
+        
+        movement.save()
+        
+        # 🤖 APRENDIZAJE AUTOMÁTICO
+        if 'account' in request.data and old_account_id != movement.account_id:
+            aprender_de_edicion(
+                movement.transaction_id,
+                movement_id,
+                movement.account_id
+            )
+        
+        # Invalidar caché
+        cache.delete(f'dashboard_{movement.transaction.company_id}')
+        
+        return Response({
+            'success': True,
+            'message': 'Movimiento actualizado exitosamente',
+            'movement': MovementSerializer(movement).data
+        })
+        
+    except Movement.DoesNotExist:
+        return Response({'error': 'Movimiento no encontrado'}, status=404)
+    except Exception as e:
+        logger.error(f"Error editando movimiento: {str(e)}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def edit_transaction(request, transaction_id):
+    """
+    Edita los datos generales de una transacción
+    """
+    try:
+        transaction = Transaction.objects.get(id=transaction_id)
+        
+        if 'date' in request.data:
+            transaction.date = request.data['date']
+        if 'concept' in request.data:
+            transaction.concept = request.data['concept']
+        if 'additional_description' in request.data:
+            transaction.additional_description = request.data['additional_description']
+        
+        transaction.save()
+        
+        cache.delete(f'dashboard_{transaction.company_id}')
+        
+        return Response({
+            'success': True,
+            'message': 'Transacción actualizada exitosamente',
+            'transaction': TransactionSerializer(transaction).data
+        })
+        
+    except Transaction.DoesNotExist:
+        return Response({'error': 'Transacción no encontrada'}, status=404)
+    except Exception as e:
+        logger.error(f"Error editando transacción: {str(e)}")
+        return Response({'error': str(e)}, status=500)
+
+
+# ============================================
+# 📊 GESTIÓN DE REGLAS MANUALES
+# ============================================
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def accounting_rules_list(request):
+    """
+    Lista y crea reglas de clasificación manualmente
+    """
+    if request.method == 'GET':
+        company_id = request.GET.get('company')
+        if not company_id:
+            return Response({'error': 'Se requiere company_id'}, status=400)
+        
+        rules = AccountingRule.objects.filter(
+            company_id=company_id
+        ).select_related('account').order_by('-confidence_score', 'third_party_name')
+        
+        rules_data = [{
+            'id': rule.id,
+            'third_party_nit': rule.third_party_nit,
+            'third_party_name': rule.third_party_name,
+            'account_code': rule.account.code,
+            'account_name': rule.account.name,
+            'confidence_score': rule.confidence_score,
+            'average_amount': float(rule.average_amount) if rule.average_amount else None,
+            'created_by_user': rule.created_by_user,
+            'updated_at': rule.updated_at.isoformat()
+        } for rule in rules]
+        
+        return Response(rules_data)
+    
+    elif request.method == 'POST':
+               
+        try:
+            rule = AccountingRule.objects.create(
+                company_id=request.data['company'],
+                third_party_nit=request.data['nit'],
+                third_party_name=request.data.get('name', ''),
+                account_id=request.data['account'],
+                created_by_user=True
+            )
+            
+            return Response({
+                'success': True,
+                'message': 'Regla creada exitosamente',
+                'rule_id': rule.id
+            }, status=201)
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def delete_accounting_rule(request, rule_id):
+    """
+    Elimina una regla de clasificación
+    """
+    try:
+        rule = AccountingRule.objects.get(id=rule_id)
+        rule.delete()
+        
+        return Response({
+            'success': True,
+            'message': 'Regla eliminada exitosamente'
+        })
+        
+    except AccountingRule.DoesNotExist:
+        return Response({'error': 'Regla no encontrada'}, status=404)
 
 # Alias para compatibilidad
 export_to_excel = export_to_excel_enhanced

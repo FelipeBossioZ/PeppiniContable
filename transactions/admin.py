@@ -1,6 +1,7 @@
 #transactios/admin.py
 from django.contrib import admin
-from .models import Company, ThirdParty, Account, Transaction, Movement, RecurringTransaction, License
+from .models import Company, ThirdParty, Account, Transaction, Movement, RecurringTransaction, License, AccountingRule
+
 
 @admin.register(Company)
 class CompanyAdmin(admin.ModelAdmin):
@@ -68,3 +69,18 @@ class LicenseAdmin(admin.ModelAdmin):
         delta = obj.expiration_date - date.today()
         return max(0, delta.days)
     get_days_remaining.short_description = 'Días Restantes'
+
+# ============================================
+# 🆕 REGLAS DE CLASIFICACIÓN INTELIGENTE
+# ============================================
+
+@admin.register(AccountingRule)
+class AccountingRuleAdmin(admin.ModelAdmin):
+    list_display = ['company', 'third_party_nit', 'third_party_name', 'account', 'confidence_score', 'average_amount', 'created_by_user']
+    list_filter = ['company', 'created_by_user', 'account']
+    search_fields = ['third_party_nit', 'third_party_name']
+    readonly_fields = ['confidence_score', 'last_amount', 'average_amount', 'created_at', 'updated_at']
+    
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related('company', 'account')
