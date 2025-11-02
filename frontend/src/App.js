@@ -1,11 +1,10 @@
-// App.js - 
+// App.js - SISTEMA CONTABLE CON PARTIDA DOBLE
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token'));
-
   const [transactions, setTransactions] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -13,76 +12,72 @@ function App() {
   const [activeTab, setActiveTab] = useState('transactions');
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState(null);
+  const [alertasContables, setAlertasContables] = useState(null);
+
   
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
-  const [form, setForm] = useState({
-    company: '',
-    date: new Date().toISOString().split('T')[0],
-    account: '',
-    third_party: '',
-    concept: '',
-    additional_description: '',
-    debit: 0,
-    credit: 0
-  });
-  
   const [reportForm, setReportForm] = useState({
     company: '',
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1
   });
 
-  
-  // Sistema de notificaciones
+  // ========== NUEVO FORMULARIO PARTIDA DOBLE ==========
+  const [transactionForm, setTransactionForm] = useState({
+    company: '',
+    date: new Date().toISOString().split('T')[0],
+    concept: '',
+    additional_description: '',
+    movements: [
+      { account: '', third_party: '', debit: 0, credit: 0, description: '' },
+      { account: '', third_party: '', debit: 0, credit: 0, description: '' }
+    ]
+  });
+
+  // ========== NOTIFICACIONES ==========
   const showNotification = (message, type = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 4000);
   };
 
-  // Cargar datos cuando hay token
+  // ========== CARGA DE DATOS ==========
   useEffect(() => {
-  if (token) {
-    fetchAllData();
-  }
-// eslint-disable-next-line react-hooks/exhaustive-deps
-}, [token]);
+  if (token) fetchAllData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   const fetchAllData = async () => {
-  setLoading(true);
-  try {
-    const headers = { 
-      'Authorization': `Token ${token}`,
-      'Content-Type': 'application/json'
-    };
-    
-    const [transRes, compRes, accRes, thirdRes] = await Promise.all([
-      axios.get('/api/transactions/', { headers }),
-      axios.get('/api/companies/', { headers }),
-      axios.get('/api/accounts/', { headers }),
-      axios.get('/api/third-parties/', { headers })
-    ]);
+    setLoading(true);
+    try {
+      const headers = { 
+        'Authorization': `Token ${token}`,
+        'Content-Type': 'application/json'
+      };
+      
+      const [transRes, compRes, accRes, thirdRes] = await Promise.all([
+        axios.get('/api/transactions/', { headers }),
+        axios.get('/api/companies/', { headers }),
+        axios.get('/api/accounts/', { headers }),
+        axios.get('/api/third-parties/', { headers })
+      ]);
 
-    // IMPORTANTE: Asegúrate de que siempre sean arrays
-    setTransactions(Array.isArray(transRes.data.results) ? transRes.data.results : 
-                    Array.isArray(transRes.data) ? transRes.data : []);
-    setCompanies(Array.isArray(compRes.data) ? compRes.data : []);
-    setAccounts(Array.isArray(accRes.data) ? accRes.data : []);
-    setThirdParties(Array.isArray(thirdRes.data) ? thirdRes.data : []);
+      setTransactions(Array.isArray(transRes.data.results) ? transRes.data.results : []);
+      setCompanies(Array.isArray(compRes.data) ? compRes.data : []);
+      setAccounts(Array.isArray(accRes.data) ? accRes.data : []);
+      setThirdParties(Array.isArray(thirdRes.data) ? thirdRes.data : []);
 
-    // ...resto del código
-  } catch (error) {
-    console.error('Error cargando datos:', error);
-    showNotification('Error al cargar datos', 'error');
-  } finally {
-    setLoading(false);
-  }
-};
+    } catch (error) {
+      console.error('Error cargando datos:', error);
+      showNotification('Error al cargar datos', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  // ========== MANEJO DE LOGIN ==========
+  // ========== LOGIN ==========
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
-    
     try {
       const response = await axios.post('/api-token-auth/', loginForm);
       const newToken = response.data.token;
@@ -90,7 +85,6 @@ function App() {
       localStorage.setItem('token', newToken);
       showNotification('¡Ingreso exitoso!', 'success');
     } catch (error) {
-      console.error('Login failed:', error);
       showNotification('Credenciales incorrectas', 'error');
     } finally {
       setLoading(false);
@@ -103,34 +97,125 @@ function App() {
     showNotification('Sesión cerrada', 'info');
   };
 
-  // ========== MANEJO DE TRANSACCIONES ==========
+  // ========== NUEVO: MANEJO PARTIDA DOBLE ==========
+  const handleMovementChange = (index, field, value) => {
+    const updatedMovements = [...transactionForm.movements];
+    
+    if (field === 'debit' || field === 'credit') {
+      // Si ingresa débito, pone crédito en 0 y viceversa
+      if (field === 'debit' && parseFloat(value) > 0) {
+        updatedMovements[index].credit = 0;
+      } else if (field === 'credit' && parseFloat(value) > 0) {
+        updatedMovements[index].debit = 0;
+      }
+      updatedMovements[index][field] = parseFloat(value) || 0;
+    } else {
+      updatedMovements[index][field] = value;
+    }
+    
+    setTransactionForm({ ...transactionForm, movements: updatedMovements });
+  };
+
+  const addMovement = () => {
+    setTransactionForm({
+      ...transactionForm,
+      movements: [
+        ...transactionForm.movements,
+        { account: '', third_party: '', debit: 0, credit: 0, description: '' }
+      ]
+    });
+  };
+
+  const removeMovement = (index) => {
+    if (transactionForm.movements.length > 2) {
+      const updatedMovements = transactionForm.movements.filter((_, i) => i !== index);
+      setTransactionForm({ ...transactionForm, movements: updatedMovements });
+    }
+  };
+
+  // ========== VALIDACIÓN PARTIDA DOBLE ==========
+  const validateTransaction = () => {
+    const totalDebit = transactionForm.movements.reduce((sum, m) => sum + parseFloat(m.debit || 0), 0);
+    const totalCredit = transactionForm.movements.reduce((sum, m) => sum + parseFloat(m.credit || 0), 0);
+    
+    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+      return { isValid: false, message: `EL ASIENTO NO CUADRA: Débito $${totalDebit} ≠ Crédito $${totalCredit}` };
+    }
+    
+    if (transactionForm.movements.length < 2) {
+      return { isValid: false, message: 'Mínimo 2 movimientos por transacción' };
+    }
+
+    const emptyFields = transactionForm.movements.some(m => !m.account || !m.third_party);
+    if (emptyFields || !transactionForm.company || !transactionForm.concept) {
+      return { isValid: false, message: 'Complete todos los campos obligatorios' };
+    }
+
+    return { isValid: true };
+  };
+
+  // ========== ENVÍO TRANSACCIÓN PARTIDA DOBLE ==========
   const handleSubmitTransaction = async (e) => {
     e.preventDefault();
-    setLoading(true);
-
-     const headers = { 
-    'Authorization': `Token ${token}`,
-    'Content-Type': 'application/json'
-  };
     
+    const validation = validateTransaction();
+    if (!validation.isValid) {
+      showNotification(validation.message, 'error');
+      return;
+    }
+
+    setLoading(true);
     try {
-      const response = await axios.post('/api/transactions/', form, { headers: headers });
+      const headers = { 
+        'Authorization': `Token ${token}`,
+        'Content-Type': 'application/json'
+      };
+
+      // Filtrar movimientos vacíos
+      const filteredMovements = transactionForm.movements.filter(m => 
+        m.account && m.third_party && (m.debit > 0 || m.credit > 0)
+      );
+
+      const transactionData = {
+        ...transactionForm,
+        movements: filteredMovements
+      };
       
-      setTransactions(prev => [response.data, ...prev]);
-      showNotification('Transacción creada exitosamente', 'success');
       
-      // Resetear formulario
-      setForm({
-        ...form,
-        concept: '',
-        additional_description: '',
-        debit: 0,
-        credit: 0
-      });
       
-      setActiveTab('transactions');
+      const response = await axios.post('/api/transactions/', transactionData, { headers });
       
-    } catch (error) {
+      if (response.data.alertas) {
+          // Mostrar alerta bonita en lugar de éxito inmediato
+          setAlertasContables({
+            alertas: response.data.alertas,
+            sugerencias: response.data.sugerencias, 
+            transactionId: response.data.id
+          });
+          
+          // NO resetear el formulario todavía - esperar confirmación
+          setTransactions(prev => [response.data, ...prev]);
+      } else {
+          // Si no hay alertas, éxito normal
+          setTransactions(prev => [response.data, ...prev]);
+          showNotification('Transacción con partida doble creada exitosamente', 'success');
+          
+          // Resetear formulario
+          setTransactionForm({
+            company: '',
+            date: new Date().toISOString().split('T')[0],
+            concept: '',
+            additional_description: '',
+            movements: [
+              { account: '', third_party: '', debit: 0, credit: 0, description: '' },
+              { account: '', third_party: '', debit: 0, credit: 0, description: '' }
+            ]
+          });
+          
+          setActiveTab('transactions');
+        }
+      }   
+  catch (error) {
       console.error('Error creando transacción:', error);
       showNotification('Error al crear transacción', 'error');
     } finally {
@@ -141,9 +226,9 @@ function App() {
   // ========== EXPORTACIÓN EXCEL ==========
   const handleDownloadReport = async () => {
     const headers = { 
-    'Authorization': `Token ${token}`,
-    'Content-Type': 'application/json'
-  };
+      'Authorization': `Token ${token}`,
+      'Content-Type': 'application/json'
+    };
     const { company, year, month } = reportForm;
     
     if (!company) {
@@ -153,12 +238,12 @@ function App() {
 
     try {
       const response = await axios.get(
-    `/api/export-excel/${company}/${year}/${month}/`, 
-    { 
-      headers: headers,
-      responseType: 'blob'
-    }
-  );
+        `/api/export-excel/${company}/${year}/${month}/`, 
+        { 
+          headers: headers,
+          responseType: 'blob'
+        }
+      );
 
       const blob = new Blob([response.data], { 
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
@@ -206,20 +291,30 @@ function App() {
   };
 
   // ========== CÁLCULO DE ESTADÍSTICAS ==========
-  
-const calculateStats = () => {
-  // Protección: asegurarse de que transactions es un array
-  if (!Array.isArray(transactions)) {
-    return { 
-      totalDebits: 0, 
-      totalCredits: 0, 
-      balance: 0, 
-      count: 0 
-    };
+ const calculateStats = () => {
+  // VERIFICACIÓN MÁS ROBUSTA
+  if (!transactions || !Array.isArray(transactions)) {
+    return { totalDebits: 0, totalCredits: 0, balance: 0, count: 0 };
   }
   
-  const totalDebits = transactions.reduce((sum, t) => sum + parseFloat(t.debit || 0), 0);
-  const totalCredits = transactions.reduce((sum, t) => sum + parseFloat(t.credit || 0), 0);
+  let totalDebits = 0;
+  let totalCredits = 0;
+
+  transactions.forEach(transaction => {
+    // VERIFICAR SI TIENE MOVIMIENTOS
+    if (transaction.movements && Array.isArray(transaction.movements)) {
+      transaction.movements.forEach(movement => {
+        totalDebits += parseFloat(movement.debit || 0);
+        totalCredits += parseFloat(movement.credit || 0);
+      });
+    }
+    // COMPATIBILIDAD CON TRANSACCIONES VIEJAS
+    else if (transaction.debit || transaction.credit) {
+      totalDebits += parseFloat(transaction.debit || 0);
+      totalCredits += parseFloat(transaction.credit || 0);
+    }
+  });
+
   const balance = totalDebits - totalCredits;
   
   return { 
@@ -232,11 +327,74 @@ const calculateStats = () => {
 
   const stats = calculateStats();
 
-  // ========== RENDERIZADO ==========
-  
+  // ========== VALIDACIÓN EN TIEMPO REAL ==========
+  const getBalanceStatus = () => {
+    const totalDebit = transactionForm.movements.reduce((sum, m) => sum + parseFloat(m.debit || 0), 0);
+    const totalCredit = transactionForm.movements.reduce((sum, m) => sum + parseFloat(m.credit || 0), 0);
+    const difference = Math.abs(totalDebit - totalCredit);
+    
+    return {
+      totalDebit,
+      totalCredit,
+      isBalanced: difference < 0.01,
+      difference
+    };
+  };
 
-  
-  // Si no hay token, mostrar login
+  const balanceStatus = getBalanceStatus();
+
+  // 🔥 PEGA ESTO JUSTO ANTES del "if (!token) {" 
+// (al final de todo el código, antes del primer return)
+
+const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  }) => (
+  <div style={{
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+    background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', 
+    justifyContent: 'center', zIndex: 10000
+  }}>
+    <div style={{
+      background: 'white', padding: '30px', borderRadius: '20px',
+      maxWidth: '500px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+      border: '3px solid #FF6B35'
+    }}>
+      <div style={{textAlign: 'center', marginBottom: '20px'}}>
+        <div style={{fontSize: '48px', marginBottom: '10px'}}>⚠️</div>
+        <h3 style={{color: '#FF6B35', margin: '0 0 10px 0'}}>Validación Contable</h3>
+        <p style={{color: '#666', margin: 0}}>El sistema detectó posibles inconsistencias</p>
+      </div>
+
+      <div style={{marginBottom: '25px'}}>
+        <div style={{background: '#FFF3CD', padding: '15px', borderRadius: '10px', marginBottom: '15px'}}>
+          <strong style={{color: '#856404'}}>📊 Alertas:</strong>
+          <ul style={{margin: '10px 0 0 0', paddingLeft: '20px', color: '#856404'}}>
+            {alertas.map((alerta, idx) => <li key={idx}>{alerta}</li>)}
+          </ul>
+        </div>
+        
+        <div style={{background: '#D1ECF1', padding: '15px', borderRadius: '10px'}}>
+          <strong style={{color: '#0C5460'}}>💡 Sugerencias:</strong>
+          <ul style={{margin: '10px 0 0 0', paddingLeft: '20px', color: '#0C5460'}}>
+            {sugerencias.map((sug, idx) => <li key={idx}>{sug}</li>)}
+          </ul>
+        </div>
+      </div>
+
+      <div style={{display: 'flex', gap: '10px', justifyContent: 'center'}}>
+       <button onClick={onCancel} style={{padding: '12px 24px', border: '2px solid #6C757D', background: 'white', color: '#6C757D', borderRadius: '10px', cursor: 'pointer', fontWeight: 'bold'}}>
+        🗑️ Eliminar Asiento
+      </button>
+      <button onClick={onAutoFix} style={{padding: '12px 24px', border: 'none', background: 'linear-gradient(135deg, #28A745, #20C997)', color: 'white', borderRadius: '10px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 15px rgba(40, 167, 69, 0.4)'}}>
+        🔄 Corregir Automáticamente
+      </button>
+      <button onClick={onConfirm} style={{padding: '12px 24px', border: 'none', background: 'linear-gradient(135deg, #FF6B35, #FF8E35)', color: 'white', borderRadius: '10px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 15px rgba(255, 107, 53, 0.4)'}}>
+        ✅ Entiendo, Continuar
+      </button>
+      </div>
+    </div>
+  </div>
+);
+
+  // ========== RENDERIZADO ==========
   if (!token) {
     return (
       <div className="login-container">
@@ -304,12 +462,85 @@ const calculateStats = () => {
         </div>
       )}
 
+      {alertasContables && (
+  <AlertaContable
+    alertas={alertasContables.alertas}
+    sugerencias={alertasContables.sugerencias}
+    onConfirm={() => {
+      setAlertasContables(null);
+      showNotification('Asiento contable creado (con alertas)', 'warning');
+      // Resetear formulario después de confirmar
+      setTransactionForm({
+        company: '',
+        date: new Date().toISOString().split('T')[0],
+        concept: '',
+        additional_description: '',
+        movements: [
+          { account: '', third_party: '', debit: 0, credit: 0, description: '' },
+          { account: '', third_party: '', debit: 0, credit: 0, description: '' }
+        ]
+      });
+      setActiveTab('transactions');
+    }}
+
+    onAutoFix={async () => {
+  try {
+    const headers = { 'Authorization': `Token ${token}` };
+    
+    // 1. Llamar al backend para corregir
+    const response = await axios.post(
+      `/api/transactions/${alertasContables.transactionId}/corregir/`, 
+      {}, 
+      { headers }
+    );
+    
+    if (response.data.success) {
+      // 2. Actualizar la transacción en el estado
+      setTransactions(prev => 
+        prev.map(t => 
+          t.id === alertasContables.transactionId ? response.data.transaction : t
+        )
+      );
+      
+      // 3. Mostrar confirmación DETALLADA
+      showNotification(
+        `✅ ${response.data.message} | Balance: $${response.data.balance_final.diferencia.toFixed(2)}`, 
+        'success'
+      );
+    } else {
+      // Mostrar error específico
+      showNotification(
+        `❌ ${response.data.error} | Diferencia: $${response.data.balance_actual?.diferencia.toFixed(2) || 'N/A'}`, 
+        'error'
+      );
+    }
+    
+  } catch (error) {
+    console.error('Error completo:', error.response?.data || error);
+    const errorMsg = error.response?.data?.error || 'Error al corregir automáticamente';
+    showNotification(`❌ ${errorMsg}`, 'error');
+  }
+  
+  setAlertasContables(null);
+}}
+
+    onCancel={async () => {
+      // Eliminar la transacción problemática
+      const headers = { 'Authorization': `Token ${token}` };
+      await axios.delete(`/api/transactions/${alertasContables.transactionId}/`, { headers });
+      setTransactions(prev => prev.filter(t => t.id !== alertasContables.transactionId));
+      setAlertasContables(null);
+      showNotification('Asiento eliminado por alertas contables', 'info');
+    }}
+  />
+)}
+
       {/* Header */}
       <div className="header">
         <div className="header-content">
           <div className="header-title">
             <div className="header-logo">TD</div>
-            <h1>Sistema de Transacciones Diarias</h1>
+            <h1>Sistema Contable - Partida Doble</h1>
           </div>
           <button onClick={handleLogout} className="btn btn-secondary">
             🚪 Cerrar Sesión
@@ -352,13 +583,13 @@ const calculateStats = () => {
             className={`tab-button ${activeTab === 'transactions' ? 'active' : ''}`}
             onClick={() => setActiveTab('transactions')}
           >
-            📊 Transacciones
+            📊 Libro Diario
           </button>
           <button 
             className={`tab-button ${activeTab === 'new' ? 'active' : ''}`}
             onClick={() => setActiveTab('new')}
           >
-            ➕ Nueva Transacción
+            ➕ Partida Doble
           </button>
           <button 
             className={`tab-button ${activeTab === 'reports' ? 'active' : ''}`}
@@ -368,12 +599,12 @@ const calculateStats = () => {
           </button>
         </div>
 
-        {/* Contenido de Tabs */}
+        {/* TAB 1: LIBRO DIARIO */}
         {activeTab === 'transactions' && (
           <div className="card">
             <div className="card-header">
-              <h2 className="card-title">📊 Transacciones Recientes</h2>
-              <span className="badge">{transactions.length} registros</span>
+              <h2 className="card-title">📊 Libro Diario - Partida Doble</h2>
+              <span className="badge">{transactions.length} asientos</span>
             </div>
             
             <div className="table-container">
@@ -381,10 +612,10 @@ const calculateStats = () => {
                 <thead>
                   <tr>
                     <th>Fecha</th>
-                    <th>Empresa</th>
+                    <th>Comprobante</th>
+                    <th>Concepto</th>
                     <th>Cuenta</th>
                     <th>Tercero</th>
-                    <th>Concepto</th>
                     <th>Débito</th>
                     <th>Crédito</th>
                   </tr>
@@ -400,27 +631,38 @@ const calculateStats = () => {
                       </td>
                     </tr>
                   ) : (
-                    transactions.slice(0, 50).map((transaction) => (
-                      <tr key={transaction.id}>
-                        <td>{formatDate(transaction.date)}</td>
-                        <td>
-                          {companies.find(c => c.id === transaction.company)?.name || '-'}
-                        </td>
-                        <td>
-                          {accounts.find(a => a.id === transaction.account)?.name || '-'}
-                        </td>
-                        <td>
-                          {thirdParties.find(tp => tp.id === transaction.third_party)?.name || '-'}
-                        </td>
-                        <td>{transaction.concept}</td>
-                        <td className="amount-debit">
-                          {transaction.debit > 0 ? formatCurrency(transaction.debit) : '-'}
-                        </td>
-                        <td className="amount-credit">
-                          {transaction.credit > 0 ? formatCurrency(transaction.credit) : '-'}
-                        </td>
-                      </tr>
-                    ))
+                    transactions.flatMap(transaction => 
+                      transaction.movements && Array.isArray(transaction.movements) 
+                        ? transaction.movements.map((movement, index) => (
+                            <tr key={`${transaction.id}-${index}`}>
+                              <td>{formatDate(transaction.date)}</td>
+                              <td style={{fontFamily: 'monospace', fontSize: '12px'}}>
+                                {transaction.number || 'N/A'}
+                              </td>
+                              <td>
+                                {transaction.concept}
+                                {index === 0 && transaction.movements.length > 1 && (
+                                  <div style={{fontSize: '11px', color: 'var(--text-secondary)'}}>
+                                    ({transaction.movements.length} movimientos)
+                                  </div>
+                                )}
+                              </td>
+                              <td>
+                                {accounts.find(a => a.id === movement.account)?.name || '-'}
+                              </td>
+                              <td>
+                                {thirdParties.find(tp => tp.id === movement.third_party)?.name || '-'}
+                              </td>
+                              <td className="amount-debit">
+                                {movement.debit > 0 ? formatCurrency(movement.debit) : '-'}
+                              </td>
+                              <td className="amount-credit">
+                                {movement.credit > 0 ? formatCurrency(movement.credit) : '-'}
+                              </td>
+                            </tr>
+                          ))
+                        : []
+                    )
                   )}
                 </tbody>
               </table>
@@ -428,21 +670,32 @@ const calculateStats = () => {
           </div>
         )}
 
+        {/* TAB 2: NUEVA TRANSACCIÓN PARTIDA DOBLE */}
         {activeTab === 'new' && (
           <div className="card">
             <div className="card-header">
-              <h2 className="card-title">➕ Registrar Nueva Transacción</h2>
+              <h2 className="card-title">➕ Sistema de Partida Doble</h2>
+              <div className="balance-status" style={{
+                padding: '8px 16px',
+                background: balanceStatus.isBalanced ? 'var(--success-light)' : 'var(--danger-light)',
+                color: balanceStatus.isBalanced ? 'var(--success)' : 'var(--danger)',
+                borderRadius: '6px',
+                fontSize: '14px',
+                fontWeight: 'bold'
+              }}>
+                {balanceStatus.isBalanced ? '✅ BALANCEADO' : `⚖️ DESBALANCEADO: $${balanceStatus.difference.toFixed(2)}`}
+              </div>
             </div>
             
             <form onSubmit={handleSubmitTransaction}>
-              <div className="form-grid">
+              {/* Datos generales de la transacción */}
+              <div className="form-grid" style={{marginBottom: '20px'}}>
                 <div className="form-group">
                   <label>Empresa *</label>
                   <select 
                     className="form-control"
-                    name="company"
-                    value={form.company}
-                    onChange={(e) => setForm({...form, company: e.target.value})}
+                    value={transactionForm.company}
+                    onChange={(e) => setTransactionForm({...transactionForm, company: e.target.value})}
                     required
                   >
                     <option value="">Seleccionar empresa...</option>
@@ -459,74 +712,9 @@ const calculateStats = () => {
                   <input
                     type="date"
                     className="form-control"
-                    name="date"
-                    value={form.date}
-                    onChange={(e) => setForm({...form, date: e.target.value})}
+                    value={transactionForm.date}
+                    onChange={(e) => setTransactionForm({...transactionForm, date: e.target.value})}
                     required
-                  />
-                </div>
-                
-                <div className="form-group">
-                  <label>Cuenta Contable *</label>
-                  <select 
-                    className="form-control"
-                    name="account"
-                    value={form.account}
-                    onChange={(e) => setForm({...form, account: e.target.value})}
-                    required
-                  >
-                    <option value="">Seleccionar cuenta...</option>
-                    {accounts.map(account => (
-                      <option key={account.id} value={account.id}>
-                        {account.code} - {account.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div className="form-group">
-                  <label>Tercero *</label>
-                  <select 
-                    className="form-control"
-                    name="third_party"
-                    value={form.third_party}
-                    onChange={(e) => setForm({...form, third_party: e.target.value})}
-                    required
-                  >
-                    <option value="">Seleccionar tercero...</option>
-                    {thirdParties.map(thirdParty => (
-                      <option key={thirdParty.id} value={thirdParty.id}>
-                        {thirdParty.name} - NIT: {thirdParty.nit}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div className="form-group">
-                  <label>Débito</label>
-                  <input
-                    type="number"
-                    className="form-control"
-                    name="debit"
-                    value={form.debit}
-                    onChange={(e) => setForm({...form, debit: parseFloat(e.target.value) || 0})}
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                  />
-                </div>
-                
-                <div className="form-group">
-                  <label>Crédito</label>
-                  <input
-                    type="number"
-                    className="form-control"
-                    name="credit"
-                    value={form.credit}
-                    onChange={(e) => setForm({...form, credit: parseFloat(e.target.value) || 0})}
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
                   />
                 </div>
               </div>
@@ -536,10 +724,9 @@ const calculateStats = () => {
                 <input
                   type="text"
                   className="form-control"
-                  name="concept"
-                  value={form.concept}
-                  onChange={(e) => setForm({...form, concept: e.target.value})}
-                  placeholder="Descripción del concepto contable"
+                  value={transactionForm.concept}
+                  onChange={(e) => setTransactionForm({...transactionForm, concept: e.target.value})}
+                  placeholder="Descripción del asiento contable"
                   required
                 />
               </div>
@@ -548,12 +735,147 @@ const calculateStats = () => {
                 <label>Descripción Adicional</label>
                 <textarea
                   className="form-control"
-                  name="additional_description"
-                  value={form.additional_description}
-                  onChange={(e) => setForm({...form, additional_description: e.target.value})}
-                  placeholder="Información adicional de la transacción (opcional)"
-                  rows="3"
+                  value={transactionForm.additional_description}
+                  onChange={(e) => setTransactionForm({...transactionForm, additional_description: e.target.value})}
+                  placeholder="Información adicional del asiento (opcional)"
+                  rows="2"
                 />
+              </div>
+
+              {/* Movimientos - PARTIDA DOBLE */}
+              <div style={{marginTop: '30px'}}>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
+                  <h3 style={{margin: 0}}>📋 Movimientos Contables</h3>
+                  <button type="button" onClick={addMovement} className="btn btn-secondary" style={{fontSize: '14px'}}>
+                    ➕ Agregar Movimiento
+                  </button>
+                </div>
+
+                {transactionForm.movements.map((movement, index) => (
+                  <div key={index} className="movement-row" style={{
+                    padding: '16px',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    marginBottom: '12px',
+                    background: 'var(--bg-main)'
+                  }}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px'}}>
+                      <h4 style={{margin: 0, fontSize: '14px', color: 'var(--text-secondary)'}}>
+                        Movimiento #{index + 1}
+                      </h4>
+                      {transactionForm.movements.length > 2 && (
+                        <button 
+                          type="button" 
+                          onClick={() => removeMovement(index)}
+                          className="btn btn-danger"
+                          style={{padding: '4px 8px', fontSize: '12px'}}
+                        >
+                          🗑️ Eliminar
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="form-grid">
+                      <div className="form-group">
+                        <label>Cuenta Contable *</label>
+                        <select 
+                          className="form-control"
+                          value={movement.account}
+                          onChange={(e) => handleMovementChange(index, 'account', e.target.value)}
+                          required
+                        >
+                          <option value="">Seleccionar cuenta...</option>
+                          {accounts.map(account => (
+                            <option key={account.id} value={account.id}>
+                              {account.code} - {account.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      <div className="form-group">
+                        <label>Tercero *</label>
+                        <select 
+                          className="form-control"
+                          value={movement.third_party}
+                          onChange={(e) => handleMovementChange(index, 'third_party', e.target.value)}
+                          required
+                        >
+                          <option value="">Seleccionar tercero...</option>
+                          {thirdParties.map(thirdParty => (
+                            <option key={thirdParty.id} value={thirdParty.id}>
+                              {thirdParty.name} - NIT: {thirdParty.nit}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      <div className="form-group">
+                        <label>Débito</label>
+                        <input
+                          type="number"
+                          className="form-control"
+                          value={movement.debit}
+                          onChange={(e) => handleMovementChange(index, 'debit', e.target.value)}
+                          step="0.01"
+                          min="0"
+                          placeholder="0.00"
+                          style={{borderColor: movement.debit > 0 ? 'var(--success)' : ''}}
+                        />
+                      </div>
+                      
+                      <div className="form-group">
+                        <label>Crédito</label>
+                        <input
+                          type="number"
+                          className="form-control"
+                          value={movement.credit}
+                          onChange={(e) => handleMovementChange(index, 'credit', e.target.value)}
+                          step="0.01"
+                          min="0"
+                          placeholder="0.00"
+                          style={{borderColor: movement.credit > 0 ? 'var(--danger)' : ''}}
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="form-group">
+                      <label>Descripción del Movimiento</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        value={movement.description}
+                        onChange={(e) => handleMovementChange(index, 'description', e.target.value)}
+                        placeholder="Detalle específico de este movimiento"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Resumen y validación */}
+              <div style={{
+                padding: '16px',
+                background: 'var(--bg-secondary)',
+                borderRadius: '8px',
+                marginTop: '20px',
+                border: `2px solid ${balanceStatus.isBalanced ? 'var(--success)' : 'var(--danger)'}`
+              }}>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                  <div>
+                    <strong>Resumen del Asiento:</strong>
+                    <div style={{fontSize: '14px', color: 'var(--text-secondary)'}}>
+                      Débito Total: <span className="amount-debit">{formatCurrency(balanceStatus.totalDebit)}</span> | 
+                      Crédito Total: <span className="amount-credit">{formatCurrency(balanceStatus.totalCredit)}</span>
+                    </div>
+                  </div>
+                  <div style={{
+                    color: balanceStatus.isBalanced ? 'var(--success)' : 'var(--danger)',
+                    fontWeight: 'bold'
+                  }}>
+                    {balanceStatus.isBalanced ? '✅ LISTO PARA GUARDAR' : '❌ CORRIJA EL BALANCE'}
+                  </div>
+                </div>
               </div>
               
               <div style={{display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px'}}>
@@ -567,16 +889,17 @@ const calculateStats = () => {
                 <button 
                   type="submit" 
                   className="btn btn-primary" 
-                  disabled={loading}
+                  disabled={loading || !balanceStatus.isBalanced}
                 >
                   {loading ? <span className="loading"></span> : '💾'}
-                  {loading ? 'Guardando...' : 'Guardar Transacción'}
+                  {loading ? 'Guardando...' : 'Guardar Asiento Contable'}
                 </button>
               </div>
             </form>
           </div>
         )}
 
+        {/* TAB 3: REPORTES (igual que antes) */}
         {activeTab === 'reports' && (
           <div className="card">
             <div className="card-header">
@@ -641,14 +964,14 @@ const calculateStats = () => {
                 className="btn btn-success"
                 disabled={!reportForm.company}
               >
-                📥 Descargar Balance de Prueba (Excel)
+                📥 Descargar Libro Diario (Excel)
               </button>
               
               <div style={{marginTop: '20px', padding: '16px', background: 'var(--bg-main)', borderRadius: '8px'}}>
                 <p style={{color: 'var(--text-secondary)', fontSize: '14px', margin: 0}}>
-                  <strong>📋 Información del Reporte:</strong> El sistema generará un Balance de Prueba por Tercero 
-                  incluyendo saldos anteriores, débitos, créditos y saldo final para el período seleccionado. 
-                  El archivo Excel incluirá validaciones y formato profesional.
+                  <strong>📋 Información del Reporte:</strong> El sistema generará un Libro Diario completo 
+                  con todos los movimientos de partida doble para el período seleccionado. 
+                  Incluye validación de balance y formato profesional.
                 </p>
               </div>
             </div>

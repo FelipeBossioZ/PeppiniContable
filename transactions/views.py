@@ -5,10 +5,10 @@ from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.db.models import Q, Sum, F, DecimalField
 from django.utils import timezone
-from .models import Transaction, Company, Account, ThirdParty, RecurringTransaction
+from .models import Transaction, Movement, Company, Account, ThirdParty, RecurringTransaction
 from .serializers import (
-    TransactionSerializer, CompanySerializer, 
-    AccountSerializer, ThirdPartySerializer
+    TransactionSerializer, TransactionCreateSerializer, MovementSerializer,
+    CompanySerializer, AccountSerializer, ThirdPartySerializer
 )
 from .permissions import HasValidLicense
 import openpyxl
@@ -27,19 +27,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ==============================================
-# VISTAS MEJORADAS DE TRANSACCIONES
+# VISTAS MEJORADAS DE TRANSACCIONES CON PARTIDA DOBLE
 # ==============================================
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated, HasValidLicense])
 def transaction_list(request):
     """
-    Lista y crea transacciones con paginación, filtros y caché
+    Lista y crea transacciones con múltiples movimientos (partida doble)
     """
     if request.method == 'GET':
         # Optimización con select_related para reducir queries
-        queryset = Transaction.objects.select_related(
-            'company', 'account', 'third_party'
+        queryset = Transaction.objects.select_related('company').prefetch_related(
+            'movements__account', 'movements__third_party'
         ).order_by('-date', '-id')
         
         # Sistema de filtros avanzados
@@ -55,27 +55,19 @@ def transaction_list(request):
         if end_date := request.GET.get('end_date'):
             filters['date__lte'] = end_date
         
-        # Filtro por cuenta
-        if account_id := request.GET.get('account'):
-            filters['account_id'] = account_id
-        
-        # Filtro por tercero
-        if third_party_id := request.GET.get('third_party'):
-            filters['third_party_id'] = third_party_id
-        
-        # Aplicar filtros
-        if filters:
-            queryset = queryset.filter(**filters)
-        
-        # Búsqueda por concepto
+        # Filtro por concepto
         if search := request.GET.get('search'):
             queryset = queryset.filter(
                 Q(concept__icontains=search) | 
                 Q(additional_description__icontains=search)
             )
         
+        # Aplicar filtros
+        if filters:
+            queryset = queryset.filter(**filters)
+        
         # Paginación mejorada
-        page_size = min(int(request.GET.get('page_size', 50)), 100)  # Límite máximo
+        page_size = min(int(request.GET.get('page_size', 50)), 100)
         paginator = Paginator(queryset, page_size)
         page_number = request.GET.get('page', 1)
         
@@ -88,10 +80,13 @@ def transaction_list(request):
             )
         
         # Calcular totales para la página actual
-        page_totals = queryset.aggregate(
-            total_debits=Sum('debit'),
-            total_credits=Sum('credit')
-        )
+        total_debits = 0
+        total_credits = 0
+        
+        for transaction in page_obj:
+            for movement in transaction.movements.all():
+                total_debits += movement.debit
+                total_credits += movement.credit
         
         serializer = TransactionSerializer(page_obj, many=True)
         
@@ -106,64 +101,55 @@ def transaction_list(request):
                 'page_size': page_size
             },
             'totals': {
-                'debits': float(page_totals['total_debits'] or 0),
-                'credits': float(page_totals['total_credits'] or 0),
-                'balance': float((page_totals['total_debits'] or 0) - (page_totals['total_credits'] or 0))
+                'debits': float(total_debits),
+                'credits': float(total_credits),
+                'balance': float(total_debits - total_credits)
             }
         })
 
     elif request.method == 'POST':
-        serializer = TransactionSerializer(data=request.data)
+        serializer = TransactionCreateSerializer(data=request.data)
+    
         if serializer.is_valid():
             try:
                 with db_transaction.atomic():
-                    # Validación de balance
-                    debit = serializer.validated_data.get('debit', 0)
-                    credit = serializer.validated_data.get('credit', 0)
-                    
-                    if debit == 0 and credit == 0:
-                        return Response(
-                            {'error': 'Debe especificar un débito o crédito'}, 
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
-                    
-                    if debit > 0 and credit > 0:
-                        return Response(
-                            {'error': 'No puede tener débito y crédito simultáneamente'}, 
-                            status=status.HTTP_400_BAD_REQUEST
-                        )
-                    
                     transaction_obj = serializer.save()
                     
-                    # Invalidar caché relacionado
-                    cache_keys = [
-                        f'dashboard_{transaction_obj.company_id}',
-                        f'balance_{transaction_obj.company_id}_{transaction_obj.account_id}',
-                    ]
+                    # 🔥 NUEVO: Obtener alertas y enviarlas al frontend
+                    alertas, sugerencias = transaction_obj.validar_logica_contable()
+                    
+                    # Invalidar caché
+                    cache_keys = [f'dashboard_{transaction_obj.company_id}']
                     cache.delete_many(cache_keys)
                     
-                    logger.info(f"Transacción creada: {transaction_obj.id} por usuario {request.user.id}")
+                    logger.info(f"Transacción creada: {transaction_obj.id}")
                     
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-                
+                    # 🔥 NUEVO: Incluir alertas en la respuesta
+                    response_data = TransactionSerializer(transaction_obj).data
+                    if alertas:
+                        response_data['alertas'] = alertas
+                        response_data['sugerencias'] = sugerencias
+                    
+                    return Response(response_data, status=status.HTTP_201_CREATED)
+                    
             except Exception as e:
                 logger.error(f"Error creando transacción: {str(e)}")
                 return Response(
-                    {'error': 'Error al crear la transacción'}, 
+                    {'error': f'Error al crear la transacción: {str(e)}'}, 
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # ==============================================
-# DASHBOARD CON ESTADÍSTICAS
+# DASHBOARD CON ESTADÍSTICAS ACTUALIZADO
 # ==============================================
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, HasValidLicense])
 def dashboard_stats(request):
     """
-    Estadísticas del dashboard con caché para mejor rendimiento
+    Estadísticas del dashboard actualizadas para partida doble
     """
     company_id = request.GET.get('company')
     if not company_id:
@@ -182,23 +168,23 @@ def dashboard_stats(request):
         today = date.today()
         first_day_month = date(today.year, today.month, 1)
         
-        # Estadísticas del mes actual
-        current_month_transactions = Transaction.objects.filter(
-            company_id=company_id,
-            date__gte=first_day_month,
-            date__lte=today
+        # Estadísticas del mes actual (desde Movements)
+        current_month_movements = Movement.objects.filter(
+            transaction__company_id=company_id,
+            transaction__date__gte=first_day_month,
+            transaction__date__lte=today
         )
         
         # Totales del mes
-        month_totals = current_month_transactions.aggregate(
+        month_totals = current_month_movements.aggregate(
             total_debits=Sum('debit'),
             total_credits=Sum('credit'),
-            transaction_count=Sum(1)
+            movement_count=Sum(1)
         )
         
         # Balance total histórico
-        all_time_totals = Transaction.objects.filter(
-            company_id=company_id
+        all_time_totals = Movement.objects.filter(
+            transaction__company_id=company_id
         ).aggregate(
             total_debits=Sum('debit'),
             total_credits=Sum('credit')
@@ -206,7 +192,7 @@ def dashboard_stats(request):
         
         # Top 5 cuentas más utilizadas
         top_accounts = (
-            Transaction.objects.filter(company_id=company_id)
+            Movement.objects.filter(transaction__company_id=company_id)
             .values('account__name', 'account__code')
             .annotate(
                 total=Sum(F('debit') + F('credit')),
@@ -223,9 +209,9 @@ def dashboard_stats(request):
             month_end_day = monthrange(month_date.year, month_date.month)[1]
             month_end = date(month_date.year, month_date.month, month_end_day)
             
-            month_data = Transaction.objects.filter(
-                company_id=company_id,
-                date__range=[month_start, month_end]
+            month_data = Movement.objects.filter(
+                transaction__company_id=company_id,
+                transaction__date__range=[month_start, month_end]
             ).aggregate(
                 debits=Sum('debit'),
                 credits=Sum('credit')
@@ -243,7 +229,7 @@ def dashboard_stats(request):
             'current_month': {
                 'debits': float(month_totals['total_debits'] or 0),
                 'credits': float(month_totals['total_credits'] or 0),
-                'transaction_count': month_totals['transaction_count'] or 0,
+                'movement_count': month_totals['movement_count'] or 0,
                 'balance': float((month_totals['total_debits'] or 0) - (month_totals['total_credits'] or 0))
             },
             'all_time': {
@@ -269,14 +255,14 @@ def dashboard_stats(request):
         )
 
 # ==============================================
-# EXPORTACIÓN MEJORADA A EXCEL
+# EXPORTACIÓN MEJORADA A EXCEL CON PARTIDA DOBLE
 # ==============================================
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, HasValidLicense])
 def export_to_excel_enhanced(request, company_id, year, month):
     """
-    Exportación mejorada a Excel con formato profesional y validaciones
+    Exportación mejorada a Excel para partida doble
     """
     try:
         company = Company.objects.get(id=company_id)
@@ -297,41 +283,42 @@ def export_to_excel_enhanced(request, company_id, year, month):
         last_day_of_month_num = monthrange(year, month)[1]
         last_day_of_month = date(year, month, last_day_of_month_num)
 
-        # Obtener transacciones optimizadas
-        transactions = Transaction.objects.filter(
-            company=company,
-            date__lte=last_day_of_month
-        ).select_related('account', 'third_party').order_by(
-            'account__code', 'third_party__nit', 'date'
-        )
+        # Obtener movimientos optimizados
+        movements = Movement.objects.filter(
+            transaction__company=company,
+            transaction__date__lte=last_day_of_month
+        ).select_related(
+            'transaction', 'account', 'third_party'
+        ).order_by('account__code', 'third_party__nit', 'transaction__date')
 
-        # Calcular balances
+        # Calcular balances por cuenta y tercero
         balances = defaultdict(lambda: {
             'saldo_anterior': Decimal('0'),
             'debitos': Decimal('0'),
             'creditos': Decimal('0'),
-            'transacciones': []
+            'movimientos': []
         })
         
-        for t in transactions:
-            key = (t.account.code, t.account.name, t.third_party.nit, t.third_party.name)
+        for m in movements:
+            key = (m.account.code, m.account.name, m.third_party.nit, m.third_party.name)
             
-            if t.date < first_day_of_month:
-                balances[key]['saldo_anterior'] += t.debit - t.credit
+            if m.transaction.date < first_day_of_month:
+                balances[key]['saldo_anterior'] += m.debit - m.credit
             else:
-                balances[key]['debitos'] += t.debit
-                balances[key]['creditos'] += t.credit
-                balances[key]['transacciones'].append({
-                    'fecha': t.date,
-                    'concepto': t.concept,
-                    'debito': t.debit,
-                    'credito': t.credit
+                balances[key]['debitos'] += m.debit
+                balances[key]['creditos'] += m.credit
+                balances[key]['movimientos'].append({
+                    'fecha': m.transaction.date,
+                    'concepto': m.transaction.concept,
+                    'debito': m.debit,
+                    'credito': m.credit,
+                    'descripcion': m.description
                 })
 
         # Crear libro de Excel con estilos profesionales
         workbook = openpyxl.Workbook()
         worksheet = workbook.active
-        worksheet.title = "Balance de Prueba"
+        worksheet.title = "Libro Diario"
 
         # Configurar estilos
         header_font = Font(bold=True, size=16, color="FFFFFF")
@@ -360,7 +347,7 @@ def export_to_excel_enhanced(request, company_id, year, month):
         
         worksheet.merge_cells('A2:H2')
         cell = worksheet['A2']
-        cell.value = "BALANCE DE PRUEBA POR TERCERO"
+        cell.value = "LIBRO DIARIO - PARTIDA DOBLE"
         cell.font = subheader_font
         cell.fill = subheader_fill
         cell.alignment = Alignment(horizontal='center', vertical='center')
@@ -447,16 +434,6 @@ def export_to_excel_enhanced(request, company_id, year, month):
         for i, width in enumerate(column_widths, 1):
             worksheet.column_dimensions[get_column_letter(i)].width = width
 
-        # Información adicional
-        row_num += 3
-        worksheet.cell(row=row_num, column=1, value="INFORMACIÓN DEL REPORTE").font = Font(bold=True)
-        row_num += 1
-        worksheet.cell(row=row_num, column=1, value=f"Generado por: {request.user.get_full_name() or request.user.username}")
-        row_num += 1
-        worksheet.cell(row=row_num, column=1, value=f"Fecha de generación: {timezone.now().strftime('%d/%m/%Y %H:%M')}")
-        row_num += 1
-        worksheet.cell(row=row_num, column=1, value=f"Total de cuentas: {len(balances)}")
-
         # Validación del balance
         balance_check = totals['debitos'] - totals['creditos']
         row_num += 2
@@ -470,37 +447,58 @@ def export_to_excel_enhanced(request, company_id, year, month):
             cell = worksheet.cell(row=row_num, column=1, value=f"✗ Diferencia de balance: {float(balance_check):,.2f}")
             cell.font = Font(color="E74C3C", bold=True)
 
-        # Crear segunda hoja con detalle de transacciones del mes
+        # Crear segunda hoja con detalle de movimientos del mes
         detail_sheet = workbook.create_sheet("Detalle del Mes")
-        detail_sheet.append(["Fecha", "Cuenta", "Tercero", "Concepto", "Débito", "Crédito"])
+        detail_headers = ["Fecha", "Comprobante", "Cuenta", "Tercero", "Concepto", "Descripción", "Débito", "Crédito"]
         
         # Estilo para encabezados de detalle
-        for cell in detail_sheet[1]:
+        for col, header in enumerate(detail_headers, 1):
+            cell = detail_sheet.cell(row=1, column=col, value=header)
             cell.font = column_header_font
             cell.fill = column_fill
             cell.border = thin_border
         
-        # Agregar transacciones del mes
-        month_transactions = Transaction.objects.filter(
-            company=company,
-            date__range=[first_day_of_month, last_day_of_month]
-        ).select_related('account', 'third_party').order_by('date')
+        # Agregar movimientos del mes
+        month_movements = Movement.objects.filter(
+            transaction__company=company,
+            transaction__date__range=[first_day_of_month, last_day_of_month]
+        ).select_related('transaction', 'account', 'third_party').order_by('transaction__date')
         
-        for t in month_transactions:
+        row_num = 2
+        for m in month_movements:
             detail_sheet.append([
-                t.date.strftime('%d/%m/%Y'),
-                f"{t.account.code} - {t.account.name}",
-                f"{t.third_party.nit} - {t.third_party.name}",
-                t.concept,
-                float(t.debit),
-                float(t.credit)
+                m.transaction.date.strftime('%d/%m/%Y'),
+                m.transaction.number,
+                f"{m.account.code} - {m.account.name}",
+                f"{m.third_party.nit} - {m.third_party.name}",
+                m.transaction.concept,
+                m.description or "",
+                float(m.debit),
+                float(m.credit)
             ])
+            
+            # Aplicar formato a la fila
+            for col in range(1, len(detail_headers) + 1):
+                cell = detail_sheet.cell(row=row_num, column=col)
+                cell.border = thin_border
+                if col >= 7:  # Columnas de montos
+                    cell.number_format = '#,##0.00'
+                    cell.alignment = Alignment(horizontal='right')
+                if row_num % 2 == 0:
+                    cell.fill = alternating_fill
+            
+            row_num += 1
+
+        # Ajustar anchos de columna en detalle
+        detail_widths = [12, 15, 25, 25, 30, 30, 12, 12]
+        for i, width in enumerate(detail_widths, 1):
+            detail_sheet.column_dimensions[get_column_letter(i)].width = width
 
         # Preparar respuesta HTTP
         response = HttpResponse(
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
-        filename = f'Balance_{company.nit}_{year}_{month:02d}.xlsx'
+        filename = f'Libro_Diario_{company.nit}_{year}_{month:02d}.xlsx'
         response['Content-Disposition'] = f'attachment; filename={filename}'
         
         workbook.save(response)
@@ -517,113 +515,7 @@ def export_to_excel_enhanced(request, company_id, year, month):
         )
 
 # ==============================================
-# TRANSACCIONES RECURRENTES MEJORADAS
-# ==============================================
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, HasValidLicense])
-def generate_recurring_transactions(request):
-    """
-    Genera transacciones recurrentes con validaciones mejoradas
-    """
-    try:
-        today = date.today()
-        day = request.data.get('day', today.day)
-        force = request.data.get('force', False)
-        
-        # Validar día
-        if not (1 <= day <= 31):
-            return Response(
-                {'error': 'Día inválido'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        recurring_transactions = RecurringTransaction.objects.filter(
-            day_of_month=day
-        ).select_related('company', 'account', 'third_party')
-        
-        if not recurring_transactions.exists():
-            return Response({
-                'message': 'No hay transacciones recurrentes para este día',
-                'created': 0
-            })
-        
-        created_transactions = []
-        skipped = []
-        errors = []
-        
-        with db_transaction.atomic():
-            for rt in recurring_transactions:
-                try:
-                    # Verificar si ya existe para este mes
-                    transaction_date = date(today.year, today.month, min(rt.day_of_month, last_day_of_month_num))
-                    
-                    exists = Transaction.objects.filter(
-                        company=rt.company,
-                        date=transaction_date,
-                        concept=rt.concept,
-                        account=rt.account,
-                        third_party=rt.third_party
-                    ).exists()
-                    
-                    if exists and not force:
-                        skipped.append({
-                            'concept': rt.concept,
-                            'reason': 'Ya existe para este mes'
-                        })
-                        continue
-                    
-                    transaction_obj = Transaction.objects.create(
-                        company=rt.company,
-                        date=transaction_date,
-                        account=rt.account,
-                        third_party=rt.third_party,
-                        concept=f"[Recurrente] {rt.concept}",
-                        additional_description=rt.additional_description,
-                        debit=rt.debit,
-                        credit=rt.credit,
-                    )
-                    created_transactions.append(transaction_obj)
-                    
-                except Exception as e:
-                    errors.append({
-                        'concept': rt.concept,
-                        'error': str(e)
-                    })
-                    logger.error(f"Error creando transacción recurrente: {str(e)}")
-        
-        # Invalidar caché
-        if created_transactions:
-            company_ids = set(t.company_id for t in created_transactions)
-            cache_keys = [f'dashboard_{cid}' for cid in company_ids]
-            cache.delete_many(cache_keys)
-        
-        serializer = TransactionSerializer(created_transactions, many=True)
-        
-        response_data = {
-            'created': len(created_transactions),
-            'skipped': len(skipped),
-            'errors': len(errors),
-            'transactions': serializer.data
-        }
-        
-        if skipped:
-            response_data['skipped_details'] = skipped
-        if errors:
-            response_data['error_details'] = errors
-        
-        logger.info(f"Transacciones recurrentes generadas: {len(created_transactions)} por usuario {request.user.id}")
-        
-        return Response(response_data, status=status.HTTP_201_CREATED)
-        
-    except Exception as e:
-        logger.error(f"Error generando transacciones recurrentes: {str(e)}")
-        return Response(
-            {'error': 'Error al generar transacciones recurrentes'}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-# ==============================================
-# VISTAS BÁSICAS QUE FALTABAN
+# VISTAS BÁSICAS ACTUALIZADAS
 # ==============================================
 
 @api_view(['GET'])
@@ -637,8 +529,8 @@ def company_list(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, HasValidLicense])
 def account_list(request):
-    """Lista de cuentas"""
-    accounts = Account.objects.all()
+    """Lista de cuentas con jerarquía"""
+    accounts = Account.objects.all().order_by('code')
     serializer = AccountSerializer(accounts, many=True)
     return Response(serializer.data)
 
@@ -650,5 +542,152 @@ def third_party_list(request):
     serializer = ThirdPartySerializer(third_parties, many=True)
     return Response(serializer.data)
 
-# Alias para compatibilidad con el nombre antiguo
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def movement_list(request):
+    """Lista de movimientos con filtros"""
+    movements = Movement.objects.select_related(
+        'transaction', 'account', 'third_party'
+    ).order_by('-transaction__date', '-id')
+    
+    # Aplicar filtros
+    if company_id := request.GET.get('company'):
+        movements = movements.filter(transaction__company_id=company_id)
+    
+    if start_date := request.GET.get('start_date'):
+        movements = movements.filter(transaction__date__gte=start_date)
+    
+    if end_date := request.GET.get('end_date'):
+        movements = movements.filter(transaction__date__lte=end_date)
+    
+    if account_id := request.GET.get('account'):
+        movements = movements.filter(account_id=account_id)
+    
+    serializer = MovementSerializer(movements, many=True)
+    return Response(serializer.data)
+
+# ==============================================
+# TRANSACCIONES RECURRENTES (FALTANTE)
+# ==============================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def generate_recurring_transactions(request):
+    """
+    Genera transacciones recurrentes - PLACEHOLDER POR AHORA
+    """
+    return Response({
+        'message': 'Funcionalidad de transacciones recurrentes en desarrollo',
+        'created': 0,
+        'skipped': 0,
+        'errors': 0
+    }, status=status.HTTP_200_OK)    
+
+
+# ==============================================
+# CORRECCIÓN AUTOMÁTICA DE TRANSACCIONES
+# ==============================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def corregir_transaccion(request, transaction_id):
+    """
+    🔥 CORRECCIÓN INTELIGENTE: Considera cuentas especiales
+    """
+    try:
+        transaction = Transaction.objects.get(id=transaction_id)
+        
+        movimientos_corregidos = 0
+        movimientos_detalle = []
+        
+        # 🔥 CUENTAS ESPECIALES (que funcionan al revés)
+        CUENTAS_ESPECIALES_DEBITO = ['4175']  # Ingresos que aumentan con débito
+        CUENTAS_ESPECIALES_CREDITO = ['5905'] # Gastos que aumentan con crédito
+        
+        for movimiento in transaction.movements.all():
+            cuenta = movimiento.account
+            tipo_cuenta = cuenta.tipo
+            codigo_cuenta = cuenta.code
+            
+            movimiento_original = {
+                'id': movimiento.id,
+                'cuenta': f"{codigo_cuenta} - {cuenta.name}",
+                'tipo': tipo_cuenta,
+                'debito_original': float(movimiento.debit),
+                'credito_original': float(movimiento.credit)
+            }
+            
+            necesita_correccion = False
+            razon = ""
+            
+            # 🔥 REGLAS PRINCIPALES CON EXCEPCIONES:
+            
+            if codigo_cuenta in CUENTAS_ESPECIALES_DEBITO:
+                # CUENTA ESPECIAL: Ingreso que AUMENTA con DÉBITO
+                if movimiento.credit > 0 and tipo_cuenta == 'INGRESO':
+                    movimiento.debit = movimiento.credit
+                    movimiento.credit = Decimal('0')
+                    necesita_correccion = True
+                    razon = f"Cuenta especial {codigo_cuenta} (ingreso) debe aumentar con débito"
+                    
+            elif codigo_cuenta in CUENTAS_ESPECIALES_CREDITO:
+                # CUENTA ESPECIAL: Gasto que AUMENTA con CRÉDITO  
+                if movimiento.debit > 0 and tipo_cuenta == 'GASTO':
+                    movimiento.credit = movimiento.debit
+                    movimiento.debit = Decimal('0')
+                    necesita_correccion = True
+                    razon = f"Cuenta especial {codigo_cuenta} (gasto) debe aumentar con crédito"
+                    
+            else:
+                # 🔥 REGLAS NORMALES para el 95% de las cuentas:
+                
+                # ACTIVOS y GASTOS NORMALES: Aumentan con DÉBITO
+                if movimiento.credit > 0 and tipo_cuenta in ['ACTIVO', 'GASTO']:
+                    movimiento.debit = movimiento.credit
+                    movimiento.credit = Decimal('0')
+                    necesita_correccion = True
+                    razon = f"{tipo_cuenta} normal debe aumentar con débito"
+                    
+                # PASIVOS, INGRESOS y PATRIMONIO NORMALES: Aumentan con CRÉDITO
+                elif movimiento.debit > 0 and tipo_cuenta in ['PASIVO', 'INGRESO', 'PATRIMONIO']:
+                    movimiento.credit = movimiento.debit
+                    movimiento.debit = Decimal('0')
+                    necesita_correccion = True
+                    razon = f"{tipo_cuenta} normal debe aumentar con crédito"
+            
+            if necesita_correccion:
+                movimiento.save()
+                movimientos_corregidos += 1
+                movimientos_detalle.append({
+                    **movimiento_original,
+                    'corregido': True,
+                    'razon': razon
+                })
+        
+        # Validar balance
+        total_debit = sum(m.debit for m in transaction.movements.all())
+        total_credit = sum(m.credit for m in transaction.movements.all())
+        diferencia = total_debit - total_credit
+        
+        return Response({
+            'success': True,
+            'message': f'Se corrigieron {movimientos_corregidos} movimientos',
+            'movimientos_corregidos': movimientos_corregidos,
+            'detalle_correcciones': movimientos_detalle,
+            'balance_final': {
+                'debitos': float(total_debit),
+                'creditos': float(total_credit),
+                'diferencia': float(diferencia),
+                'balanceado': abs(diferencia) < Decimal('0.01')
+            },
+            'transaction': TransactionSerializer(transaction).data
+        })
+        
+    except Transaction.DoesNotExist:
+        return Response({'error': 'Transacción no encontrada'}, status=404)
+    except Exception as e:
+        logger.error(f"Error en corrección automática: {str(e)}")
+        return Response({'error': f'Error interno: {str(e)}'}, status=500)
+
+# Alias para compatibilidad
 export_to_excel = export_to_excel_enhanced
