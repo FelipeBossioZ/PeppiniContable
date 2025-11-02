@@ -3,6 +3,237 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 
+
+// ========== COMPONENTES DE BÚSQUEDA INTELIGENTE ==========
+
+// Componente para búsqueda de CUENTAS (por código y nombre)
+const SearchableAccountSelect = ({ accounts, value, onChange, required = false }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedAccount, setSelectedAccount] = useState(null);
+  const dropdownRef = React.useRef(null);
+
+  // Actualizar cuenta seleccionada cuando cambia el value
+  useEffect(() => {
+    if (value) {
+      const account = accounts.find(a => a.id === parseInt(value));
+      setSelectedAccount(account);
+      if (account) {
+        setSearchTerm(`${account.code} - ${account.name}`);
+      }
+    } else {
+      setSelectedAccount(null);
+      setSearchTerm('');
+    }
+  }, [value, accounts]);
+
+  // Cerrar dropdown al hacer click fuera
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+        // Restaurar texto si no hay selección
+        if (!selectedAccount) {
+          setSearchTerm('');
+        } else {
+          setSearchTerm(`${selectedAccount.code} - ${selectedAccount.name}`);
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [selectedAccount]);
+
+  // Filtrar cuentas por código O nombre
+  const filteredAccounts = accounts.filter(account => {
+    const search = searchTerm.toLowerCase();
+    return (
+      account.code.toLowerCase().includes(search) ||
+      account.name.toLowerCase().includes(search)
+    );
+  });
+
+  const handleSelect = (account) => {
+    setSelectedAccount(account);
+    setSearchTerm(`${account.code} - ${account.name}`);
+    onChange(account.id);
+    setIsOpen(false);
+  };
+
+  const handleInputChange = (e) => {
+    setSearchTerm(e.target.value);
+    setIsOpen(true);
+    // Si borra todo, limpiar selección
+    if (e.target.value === '') {
+      onChange('');
+      setSelectedAccount(null);
+    }
+  };
+
+  return (
+    <div className="searchable-select" ref={dropdownRef}>
+      <input
+        type="text"
+        className="searchable-select-input"
+        placeholder="Escribe el código (ej: 4135) o nombre de la cuenta..."
+        value={searchTerm}
+        onChange={handleInputChange}
+        onFocus={() => setIsOpen(true)}
+        required={required}
+      />
+
+      {isOpen && (
+        <div className="searchable-select-dropdown">
+          {filteredAccounts.length > 0 && (
+            <div className="searchable-select-count">
+              {filteredAccounts.length} cuenta{filteredAccounts.length !== 1 ? 's' : ''} encontrada{filteredAccounts.length !== 1 ? 's' : ''}
+            </div>
+          )}
+          
+          {filteredAccounts.length === 0 ? (
+            <div className="searchable-select-empty">
+              ❌ No se encontraron cuentas con "{searchTerm}"
+            </div>
+          ) : (
+            filteredAccounts.map(account => (
+              <div
+                key={account.id}
+                className={`searchable-select-option ${
+                  selectedAccount?.id === account.id ? 'searchable-select-option-highlight' : ''
+                }`}
+                onClick={() => handleSelect(account)}
+              >
+                <div className="searchable-select-option-code">
+                  {account.code}
+                </div>
+                <div className="searchable-select-option-name">
+                  {account.name}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Componente para búsqueda de TERCEROS (por nombre)
+const SearchableThirdPartySelect = ({ thirdParties, value, onChange, required = false }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedThirdParty, setSelectedThirdParty] = useState(null);
+  const dropdownRef = React.useRef(null);
+
+  // Actualizar tercero seleccionado cuando cambia el value
+  useEffect(() => {
+    if (value) {
+      const thirdParty = thirdParties.find(tp => tp.id === parseInt(value));
+      setSelectedThirdParty(thirdParty);
+      if (thirdParty) {
+        setSearchTerm(thirdParty.name);
+      }
+    } else {
+      setSelectedThirdParty(null);
+      setSearchTerm('');
+    }
+  }, [value, thirdParties]);
+
+  // Cerrar dropdown al hacer click fuera
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+        // Restaurar texto si no hay selección
+        if (!selectedThirdParty) {
+          setSearchTerm('');
+        } else {
+          setSearchTerm(selectedThirdParty.name);
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [selectedThirdParty]);
+
+  // Filtrar terceros por nombre O NIT
+  const filteredThirdParties = thirdParties.filter(tp => {
+    const search = searchTerm.toLowerCase();
+    return (
+      tp.name.toLowerCase().includes(search) ||
+      tp.nit.toLowerCase().includes(search)
+    );
+  });
+
+  const handleSelect = (thirdParty) => {
+    setSelectedThirdParty(thirdParty);
+    setSearchTerm(thirdParty.name);
+    onChange(thirdParty.id);
+    setIsOpen(false);
+  };
+
+  const handleInputChange = (e) => {
+    setSearchTerm(e.target.value);
+    setIsOpen(true);
+    // Si borra todo, limpiar selección
+    if (e.target.value === '') {
+      onChange('');
+      setSelectedThirdParty(null);
+    }
+  };
+
+  return (
+    <div className="searchable-select" ref={dropdownRef}>
+      <input
+        type="text"
+        className="searchable-select-input"
+        placeholder="Escribe el nombre o NIT del tercero..."
+        value={searchTerm}
+        onChange={handleInputChange}
+        onFocus={() => setIsOpen(true)}
+        required={required}
+      />
+
+      {isOpen && (
+        <div className="searchable-select-dropdown">
+          {filteredThirdParties.length > 0 && (
+            <div className="searchable-select-count">
+              {filteredThirdParties.length} tercero{filteredThirdParties.length !== 1 ? 's' : ''} encontrado{filteredThirdParties.length !== 1 ? 's' : ''}
+            </div>
+          )}
+          
+          {filteredThirdParties.length === 0 ? (
+            <div className="searchable-select-empty">
+              ❌ No se encontraron terceros con "{searchTerm}"
+            </div>
+          ) : (
+            filteredThirdParties.map(thirdParty => (
+              <div
+                key={thirdParty.id}
+                className={`searchable-select-option ${
+                  selectedThirdParty?.id === thirdParty.id ? 'searchable-select-option-highlight' : ''
+                }`}
+                onClick={() => handleSelect(thirdParty)}
+              >
+                <div className="searchable-select-option-name">
+                  {thirdParty.name}
+                </div>
+                <div className="searchable-select-option-nit">
+                  NIT: {thirdParty.nit}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [transactions, setTransactions] = useState([]);
@@ -13,6 +244,13 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState(null);
   const [alertasContables, setAlertasContables] = useState(null);
+  const [archivoExcel, setArchivoExcel] = useState(null);
+  const [tipoFactura, setTipoFactura] = useState('recibidas');
+  const [resultadosProcesamiento, setResultadosProcesamiento] = useState(null);
+  const [editingMovement, setEditingMovement] = useState(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [accountingRules, setAccountingRules] = useState([]);
+  const [showRulesModal, setShowRulesModal] = useState(false);
 
   
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
@@ -47,32 +285,64 @@ function App() {
   }, [token]);
 
   const fetchAllData = async () => {
-    setLoading(true);
-    try {
-      const headers = { 
-        'Authorization': `Token ${token}`,
-        'Content-Type': 'application/json'
-      };
-      
-      const [transRes, compRes, accRes, thirdRes] = await Promise.all([
-        axios.get('/api/transactions/', { headers }),
-        axios.get('/api/companies/', { headers }),
-        axios.get('/api/accounts/', { headers }),
-        axios.get('/api/third-parties/', { headers })
-      ]);
+  setLoading(true);
+  try {
+    const headers = { 
+      'Authorization': `Token ${token}`,
+      'Content-Type': 'application/json'
+    };
+    
+    const [transRes, compRes, accRes, thirdRes] = await Promise.all([
+      axios.get('/api/transactions/', { headers }),
+      axios.get('/api/companies/', { headers }),
+      axios.get('/api/accounts/', { headers }),
+      axios.get('/api/third-parties/', { headers })
+    ]);
 
-      setTransactions(Array.isArray(transRes.data.results) ? transRes.data.results : []);
-      setCompanies(Array.isArray(compRes.data) ? compRes.data : []);
-      setAccounts(Array.isArray(accRes.data) ? accRes.data : []);
-      setThirdParties(Array.isArray(thirdRes.data) ? thirdRes.data : []);
-
-    } catch (error) {
-      console.error('Error cargando datos:', error);
-      showNotification('Error al cargar datos', 'error');
-    } finally {
-      setLoading(false);
+    setTransactions(Array.isArray(transRes.data.results) ? transRes.data.results : []);
+    
+    // 🔥 NUEVO: Guardar empresas y setear la primera por defecto
+    const companiesData = Array.isArray(compRes.data) ? compRes.data : [];
+    setCompanies(companiesData);
+    
+    // Si hay empresas y el formulario no tiene empresa seleccionada, usar la primera
+    if (companiesData.length > 0 && !transactionForm.company) {
+      setTransactionForm(prev => ({
+        ...prev,
+        company: companiesData[0].id.toString()
+      }));
+      setReportForm(prev => ({
+        ...prev,
+        company: companiesData[0].id.toString()
+      }));
     }
-  };
+    
+    setAccounts(Array.isArray(accRes.data) ? accRes.data : []);
+    setThirdParties(Array.isArray(thirdRes.data) ? thirdRes.data : []);
+
+    // Cargar reglas de clasificación si hay empresa seleccionada
+    if (companiesData.length > 0) {
+      try {
+        const company_id = transactionForm.company || companiesData[0].id;
+        const rulesRes = await axios.get(
+          `/api/accounting-rules/?company=${company_id}`,
+          { headers }
+        );
+        setAccountingRules(rulesRes.data || []);
+      } catch (error) {
+        console.log('Sin reglas aún:', error);
+        setAccountingRules([]);
+      }
+    }
+    
+
+  } catch (error) {
+    console.error('Error cargando datos:', error);
+    showNotification('Error al cargar datos', 'error');
+  } finally {
+    setLoading(false);
+  }
+};
 
   // ========== LOGIN ==========
   const handleLogin = async (e) => {
@@ -405,6 +675,117 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
   </div>
 );
 
+    const procesarExcelDIAN = async () => {
+  if (!archivoExcel) {
+    showNotification('Seleccione un archivo Excel', 'error');
+    return;
+  }
+
+  if (!transactionForm.company) {
+    showNotification('Seleccione una empresa', 'error');
+    return;
+  }
+
+  setLoading(true);
+  try {
+    const formData = new FormData();
+    formData.append('archivo', archivoExcel);
+    formData.append('company', transactionForm.company);
+    formData.append('tipo', tipoFactura);
+
+    const response = await axios.post(
+      '/api/procesar-facturas-excel/',
+      formData,
+      {
+        headers: {
+          'Authorization': `Token ${token}`,
+          'Content-Type': 'multipart/form-data'
+        }
+      }
+    );
+
+    setResultadosProcesamiento(response.data);
+    showNotification(
+      `✅ Procesadas: ${response.data.exitosos} facturas exitosamente`,
+      'success'
+    );
+
+    fetchAllData();
+
+  } catch (error) {
+    console.error('Error procesando Excel:', error);
+    showNotification('Error al procesar el archivo', 'error');
+  } finally {
+    setLoading(false);
+  }
+};
+
+// ============================================
+  // EDICIÓN DE MOVIMIENTOS
+  // ============================================
+  
+  const handleEditMovement = (movement) => {
+    setEditingMovement({
+      id: movement.id,
+      account: movement.account,
+      third_party: movement.third_party,
+      debit: movement.debit,
+      credit: movement.credit,
+      description: movement.description || ''
+    });
+    setEditModalOpen(true);
+  };
+
+  const saveMovementEdit = async () => {
+    if (!editingMovement) return;
+
+    setLoading(true);
+    try {
+      await axios.put(
+        `/api/movements/${editingMovement.id}/edit/`,
+        {
+          account: editingMovement.account,
+          third_party: editingMovement.third_party,
+          debit: editingMovement.debit,
+          credit: editingMovement.credit,
+          description: editingMovement.description
+        },
+        {
+          headers: {
+            'Authorization': `Token ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      showNotification('✅ Movimiento actualizado (el sistema aprendió)', 'success');
+      setEditModalOpen(false);
+      setEditingMovement(null);
+      fetchAllData();
+
+    } catch (error) {
+      console.error('Error editando movimiento:', error);
+      showNotification('Error al editar movimiento', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteRule = async (ruleId) => {
+    if (!window.confirm('¿Eliminar esta regla de clasificación?')) return;
+
+    try {
+      await axios.delete(`/api/accounting-rules/${ruleId}/delete/`, {
+        headers: { 'Authorization': `Token ${token}` }
+      });
+      
+      showNotification('Regla eliminada', 'success');
+      fetchAllData();
+    } catch (error) {
+      showNotification('Error al eliminar regla', 'error');
+    }
+  };
+
   // ========== RENDERIZADO ==========
   if (!token) {
     return (
@@ -554,6 +935,102 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
   />
 )}
 
+  {/* ============================================ */}
+  {/* MODAL DE EDICIÓN DE MOVIMIENTO */}
+  {/* ============================================ */}
+  {editModalOpen && editingMovement && (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', 
+      justifyContent: 'center', zIndex: 10000
+    }}>
+      <div style={{
+        background: 'white', padding: '30px', borderRadius: '20px',
+        maxWidth: '600px', width: '90%', maxHeight: '80vh', overflowY: 'auto'
+      }}>
+        <h3 style={{marginBottom: '20px'}}>✏️ Editar Movimiento</h3>
+        
+        <div className="form-group">
+          <label>Cuenta Contable *</label>
+          <SearchableAccountSelect
+            accounts={accounts}
+            value={editingMovement.account}
+            onChange={(accountId) => setEditingMovement({...editingMovement, account: accountId})}
+            required
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Tercero *</label>
+          <SearchableThirdPartySelect
+            thirdParties={thirdParties}
+            value={editingMovement.third_party}
+            onChange={(tpId) => setEditingMovement({...editingMovement, third_party: tpId})}
+            required
+          />
+        </div>
+
+        <div className="form-grid">
+          <div className="form-group">
+            <label>Débito</label>
+            <input
+              type="number"
+              className="form-control"
+              value={editingMovement.debit}
+              onChange={(e) => setEditingMovement({...editingMovement, debit: parseFloat(e.target.value) || 0})}
+              step="0.01"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Crédito</label>
+            <input
+              type="number"
+              className="form-control"
+              value={editingMovement.credit}
+              onChange={(e) => setEditingMovement({...editingMovement, credit: parseFloat(e.target.value) || 0})}
+              step="0.01"
+            />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>Descripción</label>
+          <input
+            type="text"
+            className="form-control"
+            value={editingMovement.description}
+            onChange={(e) => setEditingMovement({...editingMovement, description: e.target.value})}
+          />
+        </div>
+
+        <div style={{display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px'}}>
+          <button 
+            onClick={() => {
+              setEditModalOpen(false);
+              setEditingMovement(null);
+            }}
+            className="btn btn-secondary"
+          >
+            Cancelar
+          </button>
+          <button 
+            onClick={saveMovementEdit}
+            className="btn btn-primary"
+            disabled={loading}
+          >
+            {loading ? 'Guardando...' : '💾 Guardar'}
+          </button>
+        </div>
+
+        <div style={{marginTop: '20px', padding: '12px', background: '#E8F5E9', borderRadius: '8px', fontSize: '13px'}}>
+          💡 <strong>Aprendizaje Automático:</strong> Al cambiar la cuenta contable, el sistema recordará esta clasificación para futuras facturas de este proveedor.
+        </div>
+      </div>
+    </div>
+  )}
+
+
       {/* Header */}
       <div className="header">
         <div className="header-content">
@@ -616,7 +1093,20 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
           >
             📈 Reportes Excel
           </button>
-        </div>
+          <button 
+            className={`tab-button ${activeTab === 'automation' ? 'active' : ''}`}
+            onClick={() => setActiveTab('automation')}
+          >
+            🤖 Automatización
+          </button>
+          <button 
+            className={`tab-button ${activeTab === 'rules' ? 'active' : ''}`}
+            onClick={() => setActiveTab('rules')}
+          >
+            🧠 Reglas Aprendidas
+          </button>
+        </div>          
+
 
         {/* TAB 1: LIBRO DIARIO */}
         {activeTab === 'transactions' && (
@@ -637,6 +1127,7 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
                     <th>Tercero</th>
                     <th>Débito</th>
                     <th>Crédito</th>
+                    <th>Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -677,6 +1168,15 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
                               </td>
                               <td className="amount-credit">
                                 {movement.credit > 0 ? formatCurrency(movement.credit) : '-'}
+                              </td>
+                              <td>
+                                <button 
+                                  onClick={() => handleEditMovement(movement)}
+                                  className="btn-icon"
+                                  title="Editar movimiento"
+                                >
+                                  ✏️
+                                </button>
                               </td>
                             </tr>
                           ))
@@ -797,36 +1297,22 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
                     <div className="form-grid">
                       <div className="form-group">
                         <label>Cuenta Contable *</label>
-                        <select 
-                          className="form-control"
+                        <SearchableAccountSelect
+                          accounts={accounts}
                           value={movement.account}
-                          onChange={(e) => handleMovementChange(index, 'account', e.target.value)}
+                          onChange={(accountId) => handleMovementChange(index, 'account', accountId)}
                           required
-                        >
-                          <option value="">Seleccionar cuenta...</option>
-                          {accounts.map(account => (
-                            <option key={account.id} value={account.id}>
-                              {account.code} - {account.name}
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </div>
                       
                       <div className="form-group">
                         <label>Tercero *</label>
-                        <select 
-                          className="form-control"
+                        <SearchableThirdPartySelect
+                          thirdParties={thirdParties}
                           value={movement.third_party}
-                          onChange={(e) => handleMovementChange(index, 'third_party', e.target.value)}
+                          onChange={(thirdPartyId) => handleMovementChange(index, 'third_party', thirdPartyId)}
                           required
-                        >
-                          <option value="">Seleccionar tercero...</option>
-                          {thirdParties.map(thirdParty => (
-                            <option key={thirdParty.id} value={thirdParty.id}>
-                              {thirdParty.name} - NIT: {thirdParty.nit}
-                            </option>
-                          ))}
-                        </select>
+                        />
                       </div>
                       
                       <div className="form-group">
@@ -996,6 +1482,239 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
             </div>
           </div>
         )}
+
+        {/* TAB 4: AUTOMATIZACIÓN ASIENTOS */}
+        {activeTab === 'automation' && (
+          <div className="card">
+            <div className="card-header">
+              <h2 className="card-title">🤖 Procesamiento Automático - Excel DIAN</h2>
+              <span className="badge" style={{background: 'var(--success)'}}>RECOMENDADO</span>
+            </div>
+            
+            <div style={{marginBottom: '30px', padding: '16px', background: 'var(--bg-secondary)', borderRadius: '8px', border: '2px solid var(--success)'}}>
+              <h3 style={{fontSize: '18px', marginBottom: '12px'}}>📊 ¿Cómo funciona?</h3>
+              <ol style={{marginLeft: '20px', color: 'var(--text-secondary)'}}>
+                <li>Descarga los archivos Excel desde el portal DIAN</li>
+                <li>Selecciona si son facturas RECIBIDAS (gastos) o EMITIDAS (ingresos)</li>
+                <li>Sube el archivo y el sistema creará todos los asientos automáticamente</li>
+                <li>Los terceros se crean automáticamente si no existen</li>
+                <li>Los gastos se clasifican automáticamente por palabras clave</li>
+              </ol>
+            </div>
+
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Empresa *</label>
+                <select 
+                  className="form-control"
+                  value={transactionForm.company}
+                  onChange={(e) => setTransactionForm({...transactionForm, company: e.target.value})}
+                >
+                  <option value="">Seleccionar empresa...</option>
+                  {companies.map(company => (
+                    <option key={company.id} value={company.id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Tipo de Facturas *</label>
+                <select 
+                  className="form-control"
+                  value={tipoFactura}
+                  onChange={(e) => setTipoFactura(e.target.value)}
+                >
+                  <option value="recibidas">📥 Facturas RECIBIDAS (Gastos)</option>
+                  <option value="emitidas">📤 Facturas EMITIDAS (Ingresos)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Archivo Excel de la DIAN *</label>
+              <input
+                type="file"
+                className="form-control"
+                accept=".xlsx,.xls"
+                onChange={(e) => setArchivoExcel(e.target.files[0])}
+                style={{padding: '12px'}}
+              />
+              {archivoExcel && (
+                <div style={{marginTop: '8px', fontSize: '14px', color: 'var(--success)'}}>
+                  ✓ Archivo seleccionado: {archivoExcel.name}
+                </div>
+              )}
+            </div>
+
+            <button 
+              onClick={procesarExcelDIAN}
+              className="btn btn-primary"
+              disabled={loading || !archivoExcel || !transactionForm.company}
+              style={{width: '100%', fontSize: '16px', padding: '14px'}}
+            >
+              {loading ? '⏳ Procesando...' : '🚀 Procesar Facturas Automáticamente'}
+            </button>
+
+            {resultadosProcesamiento && (
+              <div style={{marginTop: '30px', padding: '20px', background: 'var(--bg-main)', borderRadius: '12px', border: '2px solid var(--border)'}}>
+                <h3 style={{marginBottom: '16px'}}>📊 Resultados del Procesamiento</h3>
+                
+                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '20px'}}>
+                  <div style={{padding: '16px', background: 'var(--success-light)', borderRadius: '8px', textAlign: 'center'}}>
+                    <div style={{fontSize: '32px', fontWeight: 'bold', color: 'var(--success)'}}>
+                      {resultadosProcesamiento.exitosos}
+                    </div>
+                    <div style={{fontSize: '14px', color: 'var(--text-secondary)'}}>✅ Exitosas</div>
+                  </div>
+                  
+                  <div style={{padding: '16px', background: 'var(--warning-light)', borderRadius: '8px', textAlign: 'center'}}>
+                    <div style={{fontSize: '32px', fontWeight: 'bold', color: '#F39C12'}}>
+                      {resultadosProcesamiento.duplicados}
+                    </div>
+                    <div style={{fontSize: '14px', color: 'var(--text-secondary)'}}>⚠️ Duplicadas</div>
+                  </div>
+                  
+                  <div style={{padding: '16px', background: 'var(--danger-light)', borderRadius: '8px', textAlign: 'center'}}>
+                    <div style={{fontSize: '32px', fontWeight: 'bold', color: 'var(--danger)'}}>
+                      {resultadosProcesamiento.errores}
+                    </div>
+                    <div style={{fontSize: '14px', color: 'var(--text-secondary)'}}>❌ Errores</div>
+                  </div>
+                  
+                  <div style={{padding: '16px', background: 'var(--bg-secondary)', borderRadius: '8px', textAlign: 'center'}}>
+                    <div style={{fontSize: '32px', fontWeight: 'bold', color: 'var(--text-primary)'}}>
+                      {resultadosProcesamiento.procesados}
+                    </div>
+                    <div style={{fontSize: '14px', color: 'var(--text-secondary)'}}>📄 Total</div>
+                  </div>
+                </div>
+
+                {resultadosProcesamiento.detalles && resultadosProcesamiento.detalles.length > 0 && (
+                  <div style={{maxHeight: '300px', overflowY: 'auto'}}>
+                    <h4 style={{fontSize: '14px', marginBottom: '8px'}}>Detalle:</h4>
+                    {resultadosProcesamiento.detalles.slice(0, 10).map((detalle, idx) => (
+                      <div key={idx} style={{
+                        padding: '8px 12px',
+                        marginBottom: '4px',
+                        background: detalle.estado === 'exitoso' ? 'var(--success-light)' : 
+                                  detalle.estado === 'duplicado' ? 'var(--warning-light)' : 'var(--danger-light)',
+                        borderRadius: '4px',
+                        fontSize: '12px'
+                      }}>
+                        {detalle.estado === 'exitoso' && `✅ Factura ${detalle.factura} - ${detalle.tercero} - ${formatCurrency(detalle.valor)}`}
+                        {detalle.estado === 'duplicado' && `⚠️ ${detalle.mensaje}: ${detalle.factura}`}
+                        {detalle.estado === 'error' && `❌ Error: ${detalle.mensaje}`}
+                      </div>
+                    ))}
+                    {resultadosProcesamiento.detalles.length > 10 && (
+                      <div style={{textAlign: 'center', padding: '8px', color: 'var(--text-secondary)', fontSize: '12px'}}>
+                        ... y {resultadosProcesamiento.detalles.length - 10} más
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: REGLAS APRENDIDAS */}
+        {activeTab === 'rules' && (
+          <div className="card">
+            <div className="card-header">
+              <h2 className="card-title">🧠 Reglas de Clasificación Aprendidas</h2>
+              <span className="badge">{accountingRules.length} reglas</span>
+            </div>
+
+            {!transactionForm.company ? (
+              <div style={{padding: '40px', textAlign: 'center', color: 'var(--text-secondary)'}}>
+                ⚠️ Selecciona una empresa primero
+              </div>
+            ) : accountingRules.length === 0 ? (
+              <div style={{padding: '40px', textAlign: 'center'}}>
+                <div style={{fontSize: '48px', marginBottom: '16px'}}>🎓</div>
+                <p style={{color: 'var(--text-secondary)'}}>
+                  Aún no hay reglas aprendidas.<br/>
+                  El sistema aprenderá automáticamente cuando edites transacciones.
+                </p>
+              </div>
+            ) : (
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>NIT Tercero</th>
+                      <th>Nombre</th>
+                      <th>Cuenta</th>
+                      <th>Confianza</th>
+                      <th>Promedio</th>
+                      <th>Origen</th>
+                      <th>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accountingRules.map(rule => (
+                      <tr key={rule.id}>
+                        <td style={{fontFamily: 'monospace'}}>{rule.third_party_nit}</td>
+                        <td>{rule.third_party_name}</td>
+                        <td>
+                          <span style={{fontFamily: 'monospace', fontWeight: 'bold'}}>
+                            {rule.account_code}
+                          </span>
+                          {' - '}
+                          <span style={{fontSize: '12px'}}>{rule.account_name}</span>
+                        </td>
+                        <td>
+                          <span style={{
+                            padding: '4px 8px',
+                            background: rule.confidence_score > 5 ? 'var(--success-light)' : 'var(--warning-light)',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontWeight: 'bold'
+                          }}>
+                            {rule.confidence_score}x
+                          </span>
+                        </td>
+                        <td>{rule.average_amount ? formatCurrency(rule.average_amount) : '-'}</td>
+                        <td>
+                          {rule.created_by_user ? (
+                            <span style={{color: 'var(--primary)'}}>👤 Manual</span>
+                          ) : (
+                            <span style={{color: 'var(--success)'}}>🤖 Automático</span>
+                          )}
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => deleteRule(rule.id)}
+                            className="btn-icon"
+                            style={{color: 'var(--danger)'}}
+                            title="Eliminar regla"
+                          >
+                            🗑️
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{marginTop: '20px', padding: '16px', background: 'var(--bg-secondary)', borderRadius: '8px'}}>
+              <h4 style={{fontSize: '14px', marginBottom: '8px'}}>ℹ️ ¿Cómo funciona?</h4>
+              <ul style={{fontSize: '13px', color: 'var(--text-secondary)', marginLeft: '20px'}}>
+                <li>El sistema aprende automáticamente cuando editas la cuenta de un movimiento</li>
+                <li>La <strong>Confianza</strong> aumenta cada vez que confirmas la misma clasificación</li>
+                <li>Si un valor es muy diferente al <strong>Promedio</strong>, el sistema te alertará</li>
+                <li>Puedes eliminar reglas que ya no necesites</li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+
       </div>
     </div>
   );

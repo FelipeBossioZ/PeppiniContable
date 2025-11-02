@@ -12,6 +12,12 @@ from .views import (
     corregir_transaccion,
     calcular_correcciones,
     validate_transaction,
+    procesar_facturas_dian_excel,
+    procesar_archivo_comprimido,
+    accounting_rules_list,
+    delete_accounting_rule,
+    edit_transaction,
+    edit_movement,
 )
 
 urlpatterns = [
@@ -26,6 +32,15 @@ urlpatterns = [
     path('transactions/<int:transaction_id>/corregir/', corregir_transaccion, name='corregir_transaccion'),
     path('transactions/<int:transaction_id>/calcular-correcciones/', calcular_correcciones, name='calcular_correcciones'),
     path('transactions/validate/', validate_transaction, name='validate_transaction'),
+    path('procesar-facturas-excel/', procesar_facturas_dian_excel, name='procesar-facturas-excel'),
+    path('procesar-comprimido/', procesar_archivo_comprimido, name='procesar-comprimido'),
+    # 🤖 SISTEMA INTELIGENTE DE CLASIFICACIÓN
+    path('accounting-rules/', accounting_rules_list, name='accounting-rules-list'),
+    path('accounting-rules/<int:rule_id>/delete/', delete_accounting_rule, name='delete-accounting-rule'),
+    
+    # ✏️ EDICIÓN DE TRANSACCIONES
+    path('transactions/<int:transaction_id>/edit/', edit_transaction, name='edit-transaction'),
+    path('movements/<int:movement_id>/edit/', edit_movement, name='edit-movement'),
     
     # ==============================================
     # URLs MEJORADAS - PARTIDA DOBLE
