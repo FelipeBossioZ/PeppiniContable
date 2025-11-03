@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
+import { PenTool } from 'lucide-react';
 
 
 // ========== COMPONENTES DE BÚSQUEDA INTELIGENTE ==========
@@ -250,7 +251,7 @@ function App() {
   const [editingMovement, setEditingMovement] = useState(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [accountingRules, setAccountingRules] = useState([]);
-  const [showRulesModal, setShowRulesModal] = useState(false);
+  //const [showRulesModal, setShowRulesModal] = useState(false);
 
   
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
@@ -425,16 +426,63 @@ function App() {
   };
 
   // ========== ENVÍO TRANSACCIÓN PARTIDA DOBLE ==========
-  // ============================================
-// REEMPLAZAR TODA LA FUNCIÓN handleSubmitTransaction
-// Busca donde dice: const handleSubmitTransaction = async (e) => {
-// Y reemplaza TODA esa función con esta versión:
-// ============================================
-
+  
 const handleSubmitTransaction = async (e) => {
   e.preventDefault();
   
   const validation = validateTransaction();
+  // Si estamos editando una transacción existente
+    // Si estamos editando una transacción existente
+    if (transactionForm.editingId) {
+      setLoading(true);
+      try {
+        const headers = { 
+          'Authorization': `Token ${token}`,
+          'Content-Type': 'application/json'
+        };
+
+        const filteredMovements = transactionForm.movements.filter(m => 
+          m.account && m.third_party && (m.debit > 0 || m.credit > 0)
+        );
+
+        // Actualizar transacción completa con todos los movimientos
+        await axios.put(
+          `/api/transactions/${transactionForm.editingId}/edit/`,
+          {
+            date: transactionForm.date,
+            concept: transactionForm.concept,
+            additional_description: transactionForm.additional_description,
+            movements: filteredMovements
+          },
+          { headers }
+        );
+
+        showNotification('✅ Transacción actualizada exitosamente', 'success');
+        
+        // Resetear formulario
+        setTransactionForm({
+          company: '',
+          date: new Date().toISOString().split('T')[0],
+          concept: '',
+          additional_description: '',
+          movements: [
+            { account: '', third_party: '', debit: 0, credit: 0, description: '' },
+            { account: '', third_party: '', debit: 0, credit: 0, description: '' }
+          ]
+        });
+        
+        setActiveTab('transactions');
+        fetchAllData();
+        
+      } catch (error) {
+        console.error('Error actualizando transacción:', error);
+        showNotification('Error al actualizar transacción', 'error');
+      } finally {
+        setLoading(false);
+      }
+      
+      return; // Salir de la función
+    }
   if (!validation.isValid) {
     showNotification(validation.message, 'error');
     return;
@@ -724,16 +772,49 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
   // EDICIÓN DE MOVIMIENTOS
   // ============================================
   
-  const handleEditMovement = (movement) => {
-    setEditingMovement({
-      id: movement.id,
-      account: movement.account,
-      third_party: movement.third_party,
-      debit: movement.debit,
-      credit: movement.credit,
-      description: movement.description || ''
-    });
-    setEditModalOpen(true);
+  // ============================================
+  // EDICIÓN DE MOVIMIENTOS Y TRANSACCIONES
+  // ============================================
+  
+  
+
+  const handleEditTransaction = async (transactionId) => {
+    try {
+      // Buscar la transacción completa
+      const transaction = transactions.find(t => t.id === transactionId);
+      
+      if (!transaction) {
+        showNotification('Transacción no encontrada', 'error');
+        return;
+      }
+
+      // Cargar en el formulario de Partida Doble
+      setTransactionForm({
+        company: transaction.company.toString(),
+        date: transaction.date,
+        concept: transaction.concept,
+        additional_description: transaction.additional_description || '',
+        movements: transaction.movements.map(m => ({
+          account: m.account,
+          third_party: m.third_party,
+          debit: m.debit,
+          credit: m.credit,
+          description: m.description || ''
+        }))
+      });
+
+      // Guardar el ID para actualizarlo después
+      setTransactionForm(prev => ({...prev, editingId: transactionId}));
+
+      // Cambiar al tab de Partida Doble
+      setActiveTab('new');
+      
+      showNotification('📝 Transacción cargada para edición', 'info');
+
+    } catch (error) {
+      console.error('Error cargando transacción:', error);
+      showNotification('Error al cargar transacción', 'error');
+    }
   };
 
   const saveMovementEdit = async () => {
@@ -1171,11 +1252,11 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
                               </td>
                               <td>
                                 <button 
-                                  onClick={() => handleEditMovement(movement)}
-                                  className="btn-icon"
-                                  title="Editar movimiento"
+                                  onClick={() => handleEditTransaction(transaction.id)}
+                                  className="btn-glass-edit"
+                                  title="Editar transacción completa"
                                 >
-                                  ✏️
+                                  <PenTool size={18} strokeWidth={2.5} />
                                 </button>
                               </td>
                             </tr>

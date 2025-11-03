@@ -1439,11 +1439,13 @@ def edit_movement(request, movement_id):
 @permission_classes([IsAuthenticated, HasValidLicense])
 def edit_transaction(request, transaction_id):
     """
-    Edita los datos generales de una transacción
+    Edita una transacción COMPLETA incluyendo sus movimientos
+    Permite agregar, editar y eliminar movimientos
     """
     try:
         transaction = Transaction.objects.get(id=transaction_id)
         
+        # Actualizar datos generales
         if 'date' in request.data:
             transaction.date = request.data['date']
         if 'concept' in request.data:
@@ -1451,8 +1453,23 @@ def edit_transaction(request, transaction_id):
         if 'additional_description' in request.data:
             transaction.additional_description = request.data['additional_description']
         
-        transaction.save()
+        # Si vienen movimientos, reemplazarlos todos
+        if 'movements' in request.data:
+            # Eliminar movimientos actuales
+            transaction.movements.all().delete()
+            
+            # Crear los nuevos movimientos
+            for mov_data in request.data['movements']:
+                Movement.objects.create(
+                    transaction=transaction,
+                    account_id=mov_data['account'],
+                    third_party_id=mov_data['third_party'],
+                    debit=Decimal(str(mov_data.get('debit', 0))),
+                    credit=Decimal(str(mov_data.get('credit', 0))),
+                    description=mov_data.get('description', '')
+                )
         
+        transaction.save()
         cache.delete(f'dashboard_{transaction.company_id}')
         
         return Response({
