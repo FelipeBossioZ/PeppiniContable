@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
-import { PenTool } from 'lucide-react';
+import { PenTool, Trash2 } from 'lucide-react';
 
 
 // ========== COMPONENTES DE BÚSQUEDA INTELIGENTE ==========
@@ -273,6 +273,8 @@ function App() {
     ]
   });
 
+  const [selectedCompanyFilter, setSelectedCompanyFilter] = useState('');
+
   // ========== NOTIFICACIONES ==========
   const showNotification = (message, type = 'success') => {
     setNotification({ message, type });
@@ -306,16 +308,24 @@ function App() {
     const companiesData = Array.isArray(compRes.data) ? compRes.data : [];
     setCompanies(companiesData);
     
-    // Si hay empresas y el formulario no tiene empresa seleccionada, usar la primera
+    // Si hay empresas y el formulario no tiene empresa seleccionada
     if (companiesData.length > 0 && !transactionForm.company) {
+      // Buscar empresa por defecto (cambia el NIT por el de tu empresa real)
+      const empresaPorDefecto = companiesData.find(c => c.nit === '811017889') 
+                              || companiesData[0];
+      
       setTransactionForm(prev => ({
         ...prev,
-        company: companiesData[0].id.toString()
+        company: empresaPorDefecto.id.toString()
       }));
+      
       setReportForm(prev => ({
         ...prev,
-        company: companiesData[0].id.toString()
+        company: empresaPorDefecto.id.toString()
       }));
+      
+      // También setear el filtro por defecto
+      setSelectedCompanyFilter(empresaPorDefecto.id.toString());
     }
     
     setAccounts(Array.isArray(accRes.data) ? accRes.data : []);
@@ -619,17 +629,22 @@ const handleSubmitTransaction = async (e) => {
     return new Date(dateString).toLocaleDateString('es-CO');
   };
 
-  // ========== CÁLCULO DE ESTADÍSTICAS ==========
+ // ========== CÁLCULO DE ESTADÍSTICAS ==========
  const calculateStats = () => {
   // VERIFICACIÓN MÁS ROBUSTA
   if (!transactions || !Array.isArray(transactions)) {
     return { totalDebits: 0, totalCredits: 0, balance: 0, count: 0 };
   }
   
+  // 🔥 FILTRAR POR EMPRESA SELECCIONADA
+  const transaccionesFiltradas = transactions.filter(t => 
+    !selectedCompanyFilter || t.company === parseInt(selectedCompanyFilter)
+  );
+  
   let totalDebits = 0;
   let totalCredits = 0;
 
-  transactions.forEach(transaction => {
+  transaccionesFiltradas.forEach(transaction => {
     // VERIFICAR SI TIENE MOVIMIENTOS
     if (transaction.movements && Array.isArray(transaction.movements)) {
       transaction.movements.forEach(movement => {
@@ -650,7 +665,7 @@ const handleSubmitTransaction = async (e) => {
     totalDebits, 
     totalCredits, 
     balance, 
-    count: transactions.length 
+    count: transaccionesFiltradas.length  // 🔥 USAR FILTRADAS
   };
 };
 
@@ -866,6 +881,70 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
       showNotification('Error al eliminar regla', 'error');
     }
   };
+
+  const handleDeleteTransaction = async (transactionId, transactionDate, transactionConcept) => {
+    // Calcular días de antigüedad
+    const today = new Date();
+    const txDate = new Date(transactionDate);
+    const daysOld = Math.floor((today - txDate) / (1000 * 60 * 60 * 24));
+    
+    // Mensaje personalizado según antigüedad
+    let confirmMessage = '';
+    //let actionType = '';
+    
+    if (daysOld <= 2) {
+      //actionType = 'eliminará';
+      confirmMessage = `⚠️ ELIMINAR DEFINITIVAMENTE
+
+Transacción: ${transactionConcept}
+Fecha: ${transactionDate} (${daysOld} días de antigüedad)
+
+Esta transacción será ELIMINADA completamente (sin rastro).
+
+¿Estás seguro?`;
+    } else {
+      //actionType = 'anulará';
+      confirmMessage = `📋 ANULAR CONTABLEMENTE
+
+Transacción: ${transactionConcept}
+Fecha: ${transactionDate} (${daysOld} días de antigüedad)
+
+Se creará un asiento INVERSO con fecha de HOY.
+La transacción original quedará visible en reportes.
+
+¿Continuar con la anulación?`;
+    }
+    
+    if (!window.confirm(confirmMessage)) return;
+
+    setLoading(true);
+    try {
+      const response = await axios.delete(
+        `/api/transactions/${transactionId}/delete/`,
+        {
+          headers: { 'Authorization': `Token ${token}` }
+        }
+      );
+
+      if (response.data.action === 'deleted') {
+        showNotification('🗑️ Transacción eliminada exitosamente', 'success');
+      } else if (response.data.action === 'cancelled') {
+        showNotification(
+          `✅ Transacción anulada. Comprobante: ${response.data.cancellation_number}`,
+          'success'
+        );
+      }
+
+      fetchAllData();
+
+    } catch (error) {
+      console.error('Error:', error);
+      showNotification('Error al procesar eliminación', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   // ========== RENDERIZADO ==========
   if (!token) {
@@ -1194,9 +1273,46 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
           <div className="card">
             <div className="card-header">
               <h2 className="card-title">📊 Libro Diario - Partida Doble</h2>
-              <span className="badge">{transactions.length} asientos</span>
+              <span className="badge">
+                {transactions.filter(t => !selectedCompanyFilter || t.company === parseInt(selectedCompanyFilter)).length} asientos
+              </span>
             </div>
-            
+
+            {/* Filtro por empresa */}
+              <div style={{padding: '16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)'}}>
+                <div style={{display: 'flex', gap: '12px', alignItems: 'center'}}>
+                  <label style={{fontWeight: 'bold', minWidth: '100px'}}>Filtrar por empresa:</label>
+                  <select 
+                    className="form-control"
+                    value={selectedCompanyFilter}
+                    onChange={(e) => setSelectedCompanyFilter(e.target.value)}
+                    style={{maxWidth: '300px'}}
+                  >
+                    <option value="">📊 Todas las empresas</option>
+                    {companies.map(company => (
+                      <option key={company.id} value={company.id}>
+                        {company.name} ({company.nit})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedCompanyFilter && (
+                    <button 
+                      onClick={() => setSelectedCompanyFilter('')}
+                      className="btn btn-secondary"
+                      style={{padding: '6px 12px', fontSize: '14px'}}
+                    >
+                      Limpiar filtro
+                    </button>
+                  )}
+                </div>
+              </div>
+             
+             {/* 🔥 AGREGAR AQUÍ - ANTES DE LA TABLA */}
+              {(() => {
+                const transaccionesFiltradas = transactions.filter(t => 
+                  !selectedCompanyFilter || t.company === parseInt(selectedCompanyFilter)
+                ); 
+               return (       
             <div className="table-container">
               <table>
                 <thead>
@@ -1222,7 +1338,7 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
                       </td>
                     </tr>
                   ) : (
-                    transactions.flatMap(transaction => 
+                    transaccionesFiltradas.flatMap(transaction => 
                       transaction.movements && Array.isArray(transaction.movements) 
                         ? transaction.movements.map((movement, index) => (
                             <tr key={`${transaction.id}-${index}`}>
@@ -1250,13 +1366,25 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
                               <td className="amount-credit">
                                 {movement.credit > 0 ? formatCurrency(movement.credit) : '-'}
                               </td>
-                              <td>
+                              <td style={{display: 'flex', gap: '8px', justifyContent: 'center'}}>
                                 <button 
                                   onClick={() => handleEditTransaction(transaction.id)}
                                   className="btn-glass-edit"
                                   title="Editar transacción completa"
                                 >
                                   <PenTool size={18} strokeWidth={2.5} />
+                                </button>
+                                
+                                <button 
+                                  onClick={() => handleDeleteTransaction(
+                                    transaction.id, 
+                                    transaction.date, 
+                                    transaction.concept
+                                  )}
+                                  className="btn-glass-delete"
+                                  title="Eliminar o anular"
+                                >
+                                  <Trash2 size={18} strokeWidth={2.5} />
                                 </button>
                               </td>
                             </tr>
@@ -1267,7 +1395,9 @@ const AlertaContable = ({ alertas, sugerencias, onConfirm, onCancel, onAutoFix  
                 </tbody>
               </table>
             </div>
-          </div>
+            );
+          })()}
+        </div>
         )}
 
         {/* TAB 2: NUEVA TRANSACCIÓN PARTIDA DOBLE */}

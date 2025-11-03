@@ -1297,7 +1297,7 @@ def clasificar_gasto_inteligente(nit, nombre, valor, company_id):
             
         except AccountingRule.DoesNotExist:
             # No existe regla → Clasificación por palabras clave
-            cuenta_code = clasificar_por_palabras_clave(nombre)
+            cuenta_code = clasificar_por_palabras_clave(nombre, company_id)
             return cuenta_code, False, "Clasificación por palabras clave"
             
     except Exception as e:
@@ -1305,19 +1305,44 @@ def clasificar_gasto_inteligente(nit, nombre, valor, company_id):
         return '5195', False, "Error en clasificación"
 
 
-def clasificar_por_palabras_clave(texto):
+def clasificar_por_palabras_clave(texto, company_id=None):
     """
     Clasificación tradicional por palabras clave
-    Fallback cuando no hay reglas aprendidas
+    Soporta patrones específicos por empresa
     """
-    CLASIFICACION = {
+    # Patrones base (todas las empresas)
+    CLASIFICACION_BASE = {
         '5120': ['arriendo', 'alquiler', 'renta', 'arrendamiento', 'lease', 'canon'],
         '5105': ['honorarios', 'nomina', 'nómina', 'salario', 'sueldo', 'prestaciones', 'personal'],
-        '5135': ['servicios', 'mantenimiento', 'reparación', 'reparacion', 'aseo', 'vigilancia'],
+        '5135': ['servicios', 'aseo', 'vigilancia'],
         '5140': ['impuesto', 'gravamen', 'predial', 'vehicular', 'ica', 'reteica', 'iva'],
-        '5145': ['seguros', 'póliza', 'aseguradora', 'poliza', 'seguro'],
+        '5130': ['seguros', 'póliza', 'aseguradora', 'poliza', 'seguro'],
         '5115': ['celular', 'internet', 'telecomunicaciones', 'telefono', 'datos'],
+        '5145': ['mantenimiento', 'reparación', 'reparacion', 'repuesto'],
     }
+    
+    # Patrones específicos por empresa
+    CLASIFICACION_POR_EMPRESA = {
+        1: {  # LOSCAREROS (pruebas)
+            '5120': ['local', 'bodega'],  # Patrones adicionales
+        },
+        3: {  # CORTIJO DE RESTREPO SAS
+            '5120': ['consultorio', 'oficina'],  # Patrones específicos
+            '5140': ['camara de comercio', 'registro'],
+            # Agrega más según necesites
+        }
+    }
+    
+    # Combinar patrones
+    CLASIFICACION = CLASIFICACION_BASE.copy()
+    
+    if company_id and company_id in CLASIFICACION_POR_EMPRESA:
+        # Agregar patrones específicos de la empresa
+        for cuenta, palabras in CLASIFICACION_POR_EMPRESA[company_id].items():
+            if cuenta in CLASIFICACION:
+                CLASIFICACION[cuenta].extend(palabras)
+            else:
+                CLASIFICACION[cuenta] = palabras
     
     texto_lower = texto.lower()
     
@@ -1556,6 +1581,98 @@ def delete_accounting_rule(request, rule_id):
         
     except AccountingRule.DoesNotExist:
         return Response({'error': 'Regla no encontrada'}, status=404)
+
+# ============================================
+# 🗑️ ELIMINACIÓN Y ANULACIÓN INTELIGENTE
+# ============================================
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, HasValidLicense])
+def delete_or_cancel_transaction(request, transaction_id):
+    """
+    Sistema híbrido inteligente:
+    - Admin + fecha reciente (≤2 días) → Elimina
+    - Otros casos → Anula (asiento inverso)
+    """
+    try:
+        transaction = Transaction.objects.get(id=transaction_id)
+        
+        # Calcular días de antigüedad
+        from datetime import date, timedelta
+        days_old = (date.today() - transaction.date).days
+        
+        # Verificar si es admin (superuser)
+        is_admin = request.user.is_superuser
+        
+        # CASO 1: Admin + fecha reciente → ELIMINAR
+        if is_admin and days_old <= 2:
+            company_id = transaction.company_id
+            transaction.delete()
+            
+            cache.delete(f'dashboard_{company_id}')
+            
+            return Response({
+                'success': True,
+                'action': 'deleted',
+                'message': f'Transacción eliminada (fecha reciente: {days_old} días)'
+            })
+        
+        # CASO 2: Usuario normal o fecha antigua → ANULAR
+        else:
+            return anular_transaction(transaction, request.user)
+            
+    except Transaction.DoesNotExist:
+        return Response({'error': 'Transacción no encontrada'}, status=404)
+    except Exception as e:
+        logger.error(f"Error en delete_or_cancel: {str(e)}")
+        return Response({'error': str(e)}, status=500)
+
+
+def anular_transaction(transaction, user):
+    """
+    Crea un asiento inverso (anulación contable profesional)
+    """
+    try:
+        from datetime import date
+        
+        with db_transaction.atomic():
+            # Crear transacción de anulación
+            anulacion = Transaction.objects.create(
+                company=transaction.company,
+                date=date.today(),  # Fecha HOY
+                concept=f"ANULACIÓN - {transaction.concept}",
+                additional_description=f"Anula comprobante {transaction.number} del {transaction.date}. Usuario: {user.username}"
+            )
+            
+            # Crear movimientos inversos
+            for mov in transaction.movements.all():
+                Movement.objects.create(
+                    transaction=anulacion,
+                    account=mov.account,
+                    third_party=mov.third_party,
+                    debit=mov.credit,  # ← Invertido
+                    credit=mov.debit,  # ← Invertido
+                    description=f"Anulación: {mov.description or ''}"
+                )
+            
+            cache.delete(f'dashboard_{transaction.company_id}')
+            
+            logger.info(
+                f"✅ Transacción {transaction.number} anulada por {user.username}. "
+                f"Comprobante anulación: {anulacion.number}"
+            )
+            
+            return Response({
+                'success': True,
+                'action': 'cancelled',
+                'message': f'Transacción anulada. Comprobante: {anulacion.number}',
+                'cancellation_number': anulacion.number,
+                'cancellation_id': anulacion.id
+            })
+            
+    except Exception as e:
+        logger.error(f"Error anulando transacción: {str(e)}")
+        return Response({'error': f'Error al anular: {str(e)}'}, status=500)
 
 # Alias para compatibilidad
 export_to_excel = export_to_excel_enhanced
