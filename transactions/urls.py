@@ -18,6 +18,7 @@ from .views import (
     delete_accounting_rule,
     edit_transaction,
     edit_movement,
+    delete_or_cancel_transaction,
 )
 
 urlpatterns = [
@@ -41,6 +42,9 @@ urlpatterns = [
     # ✏️ EDICIÓN DE TRANSACCIONES
     path('transactions/<int:transaction_id>/edit/', edit_transaction, name='edit-transaction'),
     path('movements/<int:movement_id>/edit/', edit_movement, name='edit-movement'),
+
+    # 🗑️ ELIMINACIÓN/ANULACIÓN HÍBRIDA
+    path('transactions/<int:transaction_id>/delete/', delete_or_cancel_transaction, name='delete-or-cancel-transaction'),
     
     # ==============================================
     # URLs MEJORADAS - PARTIDA DOBLE

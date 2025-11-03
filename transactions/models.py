@@ -2,8 +2,13 @@ from django.db import models
 from django.core.exceptions import ValidationError
 
 class Company(models.Model):
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=200)
     nit = models.CharField(max_length=20, unique=True)
+    transaction_prefix = models.CharField(
+        max_length=10, 
+        default='TRX',
+        help_text='Prefijo para números de comprobante (ej: TRX, CRTJ)'
+    )
 
     def __str__(self):
         return self.name
@@ -88,9 +93,27 @@ class Transaction(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.number:
-            last_transaction = Transaction.objects.order_by('-id').first()
-            last_number = int(last_transaction.number.split('-')[1]) if last_transaction and last_transaction.number else 0
-            self.number = f"TRX-{str(last_number + 1).zfill(5)}"
+            # Obtener prefijo de la empresa
+            prefix = self.company.transaction_prefix if hasattr(self.company, 'transaction_prefix') else 'TRX'
+            
+            # Buscar último número de esta empresa con este prefijo
+            last_transaction = Transaction.objects.filter(
+                company=self.company,
+                number__startswith=prefix
+            ).order_by('-id').first()
+            
+            if last_transaction and last_transaction.number:
+                # Extraer número
+                try:
+                    last_num = int(last_transaction.number.split('-')[-1])
+                    new_num = last_num + 1
+                except (ValueError, IndexError):
+                    new_num = 1
+            else:
+                new_num = 1
+            
+            self.number = f"{prefix}-{new_num:05d}"
+        
         super().save(*args, **kwargs)
 
     def validar_logica_contable(self):

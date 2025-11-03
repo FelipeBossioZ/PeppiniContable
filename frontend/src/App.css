@@ -638,3 +638,94 @@ tr:last-child td {
 .searchable-select-dropdown::-webkit-scrollbar-thumb:hover {
   background: #95a5a6;
 }
+
+/* ============================================ */
+/* 🔮 BOTONES GLASSMORPHISM MODERNOS */
+/* ============================================ */
+
+.btn-glass-edit {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: linear-gradient(135deg, 
+    rgba(59, 130, 246, 0.1), 
+    rgba(147, 51, 234, 0.1)
+  );
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  color: #3B82F6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-glass-edit:hover {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 8px 16px rgba(59, 130, 246, 0.4);
+  border-color: rgba(59, 130, 246, 0.6);
+  background: linear-gradient(135deg, 
+    rgba(59, 130, 246, 0.2), 
+    rgba(147, 51, 234, 0.2)
+  );
+}
+
+.btn-glass-edit:active {
+  transform: scale(0.95);
+}
+
+.btn-glass-edit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Animación de aparición suave */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in-up {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+/* Botón eliminar glassmorphism */
+.btn-glass-delete {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: linear-gradient(135deg, 
+    rgba(239, 68, 68, 0.1), 
+    rgba(220, 38, 38, 0.1)
+  );
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  color: #EF4444;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-glass-delete:hover {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 8px 16px rgba(239, 68, 68, 0.4);
+  border-color: rgba(239, 68, 68, 0.6);
+  background: linear-gradient(135deg, 
+    rgba(239, 68, 68, 0.2), 
+    rgba(220, 38, 38, 0.2)
+  );
+}
+
+.btn-glass-delete:active {
+  transform: scale(0.95);
+}
