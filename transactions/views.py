@@ -20,7 +20,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from collections import defaultdict
 from decimal import Decimal
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from calendar import monthrange
 import logging
 
@@ -963,11 +963,44 @@ def crear_asiento_gasto_desde_dian(row, company_id):
         numero_factura = str(row.get('número de factura') or row.get('número documento') or row.get('numero de factura') or row.get('numero documento') or row.get('numero') or '').strip()
         
         # Intentar parsear fecha
-        fecha_str = row.get('fecha') or row.get('fecha factura') or row.get('fecha emision') or row.get('fecha emisión')
+        # Intentar parsear fecha (múltiples columnas posibles)
+        # Intentar parsear fecha (múltiples columnas posibles)
+        # Intentar parsear fecha (múltiples columnas posibles)
+        fecha_str = (
+            row.get('fecha emisión') or 
+            row.get('fecha emision') or 
+            row.get('fecha recepción') or 
+            row.get('fecha recepcion') or 
+            row.get('fecha') or 
+            row.get('fecha factura')
+        )
+
         if pd.isna(fecha_str):
             fecha = date.today()
         else:
-            fecha = pd.to_datetime(fecha_str)
+            try:
+                # Si es string con formato DD-MM-YYYY o DD/MM/YYYY
+                if isinstance(fecha_str, str):
+                    # Limpiar y parsear manualmente
+                    fecha_limpia = fecha_str.strip()
+                    # Intentar varios formatos
+                    for fmt in ['%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y']:
+                        try:
+                            fecha = datetime.strptime(fecha_limpia, fmt).date()
+                            break
+                        except:
+                            continue
+                    else:
+                        # Si ningún formato funcionó, usar pandas
+                        fecha_parsed = pd.to_datetime(fecha_str, dayfirst=True)
+                        fecha = date(fecha_parsed.year, fecha_parsed.month, fecha_parsed.day)
+                else:
+                    # Si ya es datetime de pandas
+                    fecha_parsed = pd.to_datetime(fecha_str, dayfirst=True)
+                    fecha = date(fecha_parsed.year, fecha_parsed.month, fecha_parsed.day)
+            except Exception as e:
+                logger.warning(f"Error parseando fecha '{fecha_str}': {e}")
+                fecha = date.today()
             
         valor = float(row.get('valor total') or row.get('total factura') or row.get('total') or row.get('valor') or 0)
         concepto = str(row.get('concepto') or row.get('descripción') or row.get('descripcion') or row.get('observaciones') or 'Gasto general').strip()
@@ -1003,7 +1036,7 @@ def crear_asiento_gasto_desde_dian(row, company_id):
         with db_transaction.atomic():
             transaction = Transaction.objects.create(
                 company_id=company_id,
-                date=fecha.date() if hasattr(fecha, 'date') else fecha,
+                date=fecha,
                 concept=f"Factura {numero_factura}: {concepto[:100]}",
                 additional_description=f"Procesado automáticamente desde Excel DIAN - {nombre}"
             )
@@ -1090,7 +1123,7 @@ def crear_asiento_ingreso_desde_dian(row, company_id):
         with db_transaction.atomic():
             transaction = Transaction.objects.create(
                 company_id=company_id,
-                date=fecha.date() if hasattr(fecha, 'date') else fecha,
+                date=fecha,
                 concept=f"Factura venta {numero_factura}: {concepto[:100]}",
                 additional_description=f"Procesado automáticamente desde Excel DIAN - {nombre}"
             )
@@ -1167,33 +1200,6 @@ def obtener_o_crear_tercero(nit, nombre):
         tercero.save()
     
     return tercero
-
-
-def clasificar_gasto_automatico(concepto):
-    """
-    Clasifica el gasto en una cuenta PUC basado en palabras clave
-    """
-    CLASIFICACION = {
-        '5135': ['arriendo', 'alquiler', 'renta', 'arrendamiento', 'lease', 'canon'],
-        '5120': ['honorarios', 'consultoría', 'asesoría', 'servicios profesionales', 'consultoria', 'asesoria'],
-        '5195': ['publicidad', 'marketing', 'facebook', 'google', 'instagram', 'ads', 'pauta'],
-        '5105': ['gasolina', 'combustible', 'peaje', 'transporte', 'uber', 'taxi', 'parqueadero'],
-        '5115': ['celular', 'internet', 'telecomunicaciones', 'claro', 'movistar', 'tigo', 'telefono'],
-        '5140': ['impuesto', 'gravamen', 'predial', 'vehicular', 'ica', 'reteica'],
-        '5145': ['seguros', 'póliza', 'aseguradora', 'poliza'],
-        '5160': ['mantenimiento', 'reparación', 'repuesto', 'reparacion'],
-        '5205': ['papelería', 'oficina', 'útiles', 'elementos', 'papeleria', 'utiles'],
-        '5110': ['salario', 'nomina', 'nómina', 'sueldo', 'prestaciones'],
-    }
-    
-    concepto_lower = concepto.lower()
-    
-    for cuenta, keywords in CLASIFICACION.items():
-        if any(keyword in concepto_lower for keyword in keywords):
-            return cuenta
-    
-    # Por defecto: Gastos varios
-    return '5195'
 
 
 @api_view(['POST'])
@@ -1324,21 +1330,27 @@ def clasificar_por_palabras_clave(texto, company_id=None):
     # Patrones específicos por empresa
     CLASIFICACION_POR_EMPRESA = {
         1: {  # LOSCAREROS (pruebas)
-            '5120': ['local', 'bodega'],  # Patrones adicionales
+            '5120': ['local', 'bodega'],
         },
         3: {  # CORTIJO DE RESTREPO SAS
-            '5120': ['consultorio', 'oficina'],  # Patrones específicos
+            '5120': ['consultorio', 'oficina'],
             '5140': ['camara de comercio', 'registro'],
-            # Agrega más según necesites
+            '5135': ['nativa'],
+            '5110': ['fernandez fernandez german tulio', 'german tulio'],
+            '5395': ['seguros de vida', 'pricesmart colombia', 'pricesmart'],
+            '5295': ['criadores', 'ganado', 'riviera del golfo', 'club nautico'],
         }
     }
     
     # Combinar patrones
     CLASIFICACION = CLASIFICACION_BASE.copy()
     
-    if company_id and company_id in CLASIFICACION_POR_EMPRESA:
+    # Convertir a int para comparar
+    company_id_int = int(company_id) if company_id else None
+    
+    if company_id_int and company_id_int in CLASIFICACION_POR_EMPRESA:
         # Agregar patrones específicos de la empresa
-        for cuenta, palabras in CLASIFICACION_POR_EMPRESA[company_id].items():
+        for cuenta, palabras in CLASIFICACION_POR_EMPRESA[company_id_int].items():
             if cuenta in CLASIFICACION:
                 CLASIFICACION[cuenta].extend(palabras)
             else:
