@@ -729,3 +729,267 @@ tr:last-child td {
 .btn-glass-delete:active {
   transform: scale(0.95);
 }
+
+.btn-glass-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ============================================ */
+/* ESTILOS ADICIONALES */
+/* ============================================ */
+
+/* Loading Overlay */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.loading-content {
+  text-align: center;
+  color: white;
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+.loading-text {
+  display: block;
+  margin-top: 15px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+/* Loading Container (inline) */
+.loading-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+}
+
+/* Notification Close Button */
+.notification-close {
+  background: transparent;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 4px;
+  margin-left: 10px;
+  border-radius: 4px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.notification-close:hover {
+  opacity: 1;
+}
+
+/* Notification Warning */
+.notification.warning {
+  background: linear-gradient(135deg, var(--warning) 0%, #d97706 100%);
+}
+
+/* Searchable Select Improvements */
+.searchable-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-main);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.searchable-select-trigger:hover {
+  border-color: var(--accent);
+}
+
+.searchable-select-trigger.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.searchable-select-trigger.error {
+  border-color: var(--danger);
+}
+
+.searchable-select-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchable-select-value.placeholder {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.searchable-select-icons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.searchable-select-clear {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.2s;
+}
+
+.searchable-select-clear:hover {
+  color: var(--danger);
+}
+
+.searchable-select-chevron {
+  color: var(--text-secondary);
+  transition: transform 0.2s;
+}
+
+.searchable-select-chevron.open {
+  transform: rotate(180deg);
+}
+
+.searchable-select-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: white;
+}
+
+.searchable-select-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  outline: none;
+}
+
+.searchable-select-options {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+/* Form Error */
+.form-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 5px;
+}
+
+.form-control.error {
+  border-color: var(--danger);
+}
+
+/* Required Indicator */
+.required-indicator {
+  color: var(--danger);
+  margin-left: 4px;
+}
+
+/* Deleted Row */
+.deleted-row {
+  opacity: 0.5;
+  text-decoration: line-through;
+  background: #fef2f2;
+}
+
+/* Expanded Row */
+.expanded-row {
+  background: #f8fafc;
+}
+
+.expanded-row:hover {
+  background: #f8fafc;
+}
+
+/* Print Styles */
+@media print {
+  .header,
+  .tabs,
+  .btn,
+  .notification {
+    display: none !important;
+  }
+
+  .container {
+    max-width: 100%;
+    padding: 0;
+  }
+
+  .card {
+    box-shadow: none;
+    border: 1px solid #000;
+    page-break-inside: avoid;
+  }
+
+  .table-container {
+    overflow: visible;
+  }
+
+  table {
+    min-width: auto;
+  }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus Visible */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent);
+  color: white;
+}
+
+/* Scrollbar Global */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-main);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
