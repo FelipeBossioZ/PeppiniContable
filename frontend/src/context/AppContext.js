@@ -1,9 +1,10 @@
 // context/AppContext.js
 /**
  * Contexto global de la aplicación
+ * Corregido: Eliminadas dependencias circulares que causaban bucles infinitos
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   companyService,
   accountService,
@@ -24,6 +25,10 @@ export const AppProvider = ({ children }) => {
   // Notificaciones
   const notification = useNotification();
 
+  // Ref para evitar dependencias circulares en callbacks
+  const notificationRef = useRef(notification);
+  notificationRef.current = notification;
+
   // Estados de datos
   const [companies, setCompanies] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -37,6 +42,10 @@ export const AppProvider = ({ children }) => {
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [activeTab, setActiveTab] = useState('transactions');
 
+  // Control para evitar cargas duplicadas
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
+  const loadingRef = useRef(false);
+
   // Paginación
   const [pagination, setPagination] = useState({
     page: 1,
@@ -44,9 +53,11 @@ export const AppProvider = ({ children }) => {
     totalCount: 0,
   });
 
-  // Cargar datos iniciales
+  // Cargar datos iniciales (solo una vez)
   const loadInitialData = useCallback(async () => {
-    if (!auth.isAuthenticated) return;
+    // Prevenir cargas duplicadas
+    if (loadingRef.current || initialDataLoaded) return;
+    loadingRef.current = true;
 
     setLoading(true);
     try {
@@ -56,32 +67,39 @@ export const AppProvider = ({ children }) => {
         thirdPartyService.getAll(),
       ]);
 
-      setCompanies(Array.isArray(companiesData) ? companiesData : companiesData.results || []);
-      setAccounts(Array.isArray(accountsData) ? accountsData : accountsData.results || []);
-      setThirdParties(Array.isArray(thirdPartiesData) ? thirdPartiesData : thirdPartiesData.results || []);
+      const companiesList = Array.isArray(companiesData) ? companiesData : companiesData.results || [];
+      const accountsList = Array.isArray(accountsData) ? accountsData : accountsData.results || [];
+      const thirdPartiesList = Array.isArray(thirdPartiesData) ? thirdPartiesData : thirdPartiesData.results || [];
+
+      setCompanies(companiesList);
+      setAccounts(accountsList);
+      setThirdParties(thirdPartiesList);
 
       // Seleccionar primera empresa si hay
-      const companiesList = Array.isArray(companiesData) ? companiesData : companiesData.results || [];
-      if (companiesList.length > 0 && !selectedCompany) {
+      if (companiesList.length > 0) {
         setSelectedCompany(companiesList[0].id);
       }
+
+      setInitialDataLoaded(true);
     } catch (error) {
       console.error('Error loading initial data:', error);
-      notification.showError('Error al cargar datos iniciales');
+      notificationRef.current.showError('Error al cargar datos iniciales');
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
-  }, [auth.isAuthenticated, notification, selectedCompany]);
+  }, [initialDataLoaded]); // Solo depende de initialDataLoaded
 
   // Cargar transacciones
-  const loadTransactions = useCallback(async (filters = {}) => {
-    if (!auth.isAuthenticated) return;
+  const loadTransactions = useCallback(async (filters = {}, companyId = null) => {
+    const company = companyId || selectedCompany;
+    if (!company) return;
 
     setLoading(true);
     try {
       const params = {
         ...filters,
-        company: selectedCompany || filters.company,
+        company,
       };
       const data = await transactionService.getAll(params);
 
@@ -97,100 +115,121 @@ export const AppProvider = ({ children }) => {
       }
     } catch (error) {
       console.error('Error loading transactions:', error);
-      notification.showError('Error al cargar transacciones');
+      notificationRef.current.showError('Error al cargar transacciones');
     } finally {
       setLoading(false);
     }
-  }, [auth.isAuthenticated, selectedCompany, notification]);
+  }, [selectedCompany]);
 
   // Cargar dashboard stats
-  const loadDashboardStats = useCallback(async () => {
-    if (!auth.isAuthenticated) return;
+  const loadDashboardStats = useCallback(async (companyId = null) => {
+    const company = companyId || selectedCompany;
+    if (!company) return;
 
     try {
-      const data = await reportService.getDashboardStats(selectedCompany);
+      const data = await reportService.getDashboardStats(company);
       setDashboardStats(data);
     } catch (error) {
       console.error('Error loading dashboard stats:', error);
     }
-  }, [auth.isAuthenticated, selectedCompany]);
+  }, [selectedCompany]);
 
   // Cargar reglas de clasificación
-  const loadAccountingRules = useCallback(async () => {
-    if (!auth.isAuthenticated) return;
+  const loadAccountingRules = useCallback(async (companyId = null) => {
+    const company = companyId || selectedCompany;
+    if (!company) return;
 
     try {
-      const data = await accountingRuleService.getAll(selectedCompany);
+      const data = await accountingRuleService.getAll(company);
       setAccountingRules(Array.isArray(data) ? data : data.results || []);
     } catch (error) {
       console.error('Error loading accounting rules:', error);
     }
-  }, [auth.isAuthenticated, selectedCompany]);
+  }, [selectedCompany]);
 
   // Crear transacción
   const createTransaction = useCallback(async (transactionData) => {
     try {
       const result = await transactionService.create(transactionData);
-      notification.showSuccess('Transacción creada exitosamente');
+      notificationRef.current.showSuccess('Transacción creada exitosamente');
       await loadTransactions();
       return { success: true, data: result };
     } catch (error) {
       const errorMsg = error.response?.data?.detail || 'Error al crear transacción';
-      notification.showError(errorMsg);
+      notificationRef.current.showError(errorMsg);
       return { success: false, error: errorMsg };
     }
-  }, [loadTransactions, notification]);
+  }, [loadTransactions]);
 
   // Actualizar transacción
   const updateTransaction = useCallback(async (id, transactionData) => {
     try {
       const result = await transactionService.update(id, transactionData);
-      notification.showSuccess('Transacción actualizada exitosamente');
+      notificationRef.current.showSuccess('Transacción actualizada exitosamente');
       await loadTransactions();
       return { success: true, data: result };
     } catch (error) {
       const errorMsg = error.response?.data?.detail || 'Error al actualizar transacción';
-      notification.showError(errorMsg);
+      notificationRef.current.showError(errorMsg);
       return { success: false, error: errorMsg };
     }
-  }, [loadTransactions, notification]);
+  }, [loadTransactions]);
 
   // Eliminar transacción
   const deleteTransaction = useCallback(async (id) => {
     try {
       await transactionService.delete(id);
-      notification.showSuccess('Transacción eliminada exitosamente');
+      notificationRef.current.showSuccess('Transacción eliminada exitosamente');
       await loadTransactions();
       return { success: true };
     } catch (error) {
       const errorMsg = error.response?.data?.detail || 'Error al eliminar transacción';
-      notification.showError(errorMsg);
+      notificationRef.current.showError(errorMsg);
       return { success: false, error: errorMsg };
     }
-  }, [loadTransactions, notification]);
+  }, [loadTransactions]);
 
   // Refrescar datos de una empresa
-  const refreshCompanyData = useCallback(async () => {
-    await Promise.all([
-      loadTransactions(),
-      loadDashboardStats(),
-      loadAccountingRules(),
-    ]);
-  }, [loadTransactions, loadDashboardStats, loadAccountingRules]);
+  const refreshCompanyData = useCallback(async (companyId = null) => {
+    const company = companyId || selectedCompany;
+    if (!company) return;
 
-  // Efecto para cargar datos al autenticarse
+    await Promise.all([
+      loadTransactions({}, company),
+      loadDashboardStats(company),
+      loadAccountingRules(company),
+    ]);
+  }, [loadTransactions, loadDashboardStats, loadAccountingRules, selectedCompany]);
+
+  // Efecto para cargar datos al autenticarse (solo una vez)
   useEffect(() => {
-    if (auth.isAuthenticated) {
+    if (auth.isAuthenticated && !initialDataLoaded) {
       loadInitialData();
     }
-  }, [auth.isAuthenticated, loadInitialData]);
+  }, [auth.isAuthenticated, initialDataLoaded, loadInitialData]);
 
   // Efecto para cargar datos cuando cambia la empresa seleccionada
   useEffect(() => {
-    if (auth.isAuthenticated && selectedCompany) {
-      refreshCompanyData();
+    // Solo ejecutar si los datos iniciales ya se cargaron
+    // y hay una empresa seleccionada
+    if (initialDataLoaded && selectedCompany) {
+      refreshCompanyData(selectedCompany);
     }
-  }, [auth.isAuthenticated, selectedCompany, refreshCompanyData]);
+  }, [selectedCompany]); // Solo depende de selectedCompany, no de las funciones
+
+  // Reset cuando el usuario cierra sesión
+  useEffect(() => {
+    if (!auth.isAuthenticated) {
+      setCompanies([]);
+      setAccounts([]);
+      setThirdParties([]);
+      setTransactions([]);
+      setAccountingRules([]);
+      setDashboardStats(null);
+      setSelectedCompany(null);
+      setInitialDataLoaded(false);
+    }
+  }, [auth.isAuthenticated]);
 
   const value = {
     // Auth (login, logout, isAuthenticated, token, user)
