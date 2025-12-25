@@ -7,6 +7,7 @@ import axios from 'axios';
 
 // Configuración base de la API
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+const AUTH_URL = process.env.REACT_APP_AUTH_URL || 'http://localhost:8000/api-token-auth/';
 
 // Crear instancia de axios con configuración base
 const api = axios.create({
@@ -16,6 +17,12 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Log para debugging (remover en producción)
+if (process.env.NODE_ENV === 'development') {
+  console.log('API URL:', API_BASE_URL);
+  console.log('Auth URL:', AUTH_URL);
+}
 
 // Interceptor para agregar token de autenticación
 api.interceptors.request.use(
@@ -48,10 +55,12 @@ api.interceptors.response.use(
 
 export const authService = {
   login: async (username, password) => {
-    const response = await axios.post(`${API_BASE_URL.replace('/api', '')}/api-token-auth/`, {
+    console.log('Attempting login to:', AUTH_URL);
+    const response = await axios.post(AUTH_URL, {
       username,
       password,
     });
+    console.log('Login response:', response.data);
     return response.data;
   },
 

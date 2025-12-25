@@ -193,8 +193,14 @@ export const AppProvider = ({ children }) => {
   }, [auth.isAuthenticated, selectedCompany, refreshCompanyData]);
 
   const value = {
-    // Auth
-    ...auth,
+    // Auth (login, logout, isAuthenticated, token, user)
+    login: auth.login,
+    logout: auth.logout,
+    isAuthenticated: auth.isAuthenticated,
+    token: auth.token,
+    user: auth.user,
+    authLoading: auth.loading,
+    authError: auth.error,
 
     // Notificaciones
     notification: notification.notification,
@@ -203,6 +209,7 @@ export const AppProvider = ({ children }) => {
     showError: notification.showError,
     showInfo: notification.showInfo,
     showWarning: notification.showWarning,
+    clearNotification: notification.clearNotification,
 
     // Datos
     companies,
@@ -212,8 +219,9 @@ export const AppProvider = ({ children }) => {
     accountingRules,
     dashboardStats,
 
-    // UI
-    loading,
+    // UI - usar authLoading para login, loading para datos
+    loading: loading || auth.loading,
+    dataLoading: loading,
     selectedCompany,
     setSelectedCompany,
     activeTab,
